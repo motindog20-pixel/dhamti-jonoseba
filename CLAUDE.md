@@ -60,7 +60,7 @@ Storage/writes are effectively unlimited. **Row reads are the bottleneck**: `get
 8. Optional: auto-refresh of open pages (poll every N minutes).
 
 ## 9. Roadmap
-Six-month plan toward the public release on **1 April 2027** is in `ROADMAP-bn.md` (phases Dec–Mar, launch checklist, risks). Election/campaign date still to be confirmed by the owner. When a phase item ships, tick it off there.
+Six-month plan toward the public release on **1 April 2027** is in `ROADMAP-bn.md` (phases Dec–Mar, launch checklist, risks). Election day per owner: **27 May 2027** (an Oct-2026 news item listed 27 May as UP phase 7, not final) — owner must confirm the official schedule with the district election officer. Freeze code 22 Mar; no code changes in the vote week (16–26 May) except critical fixes. When a phase item ships, tick it off there.
 
 ## 10. Log (newest first)
 - 2026-11-19: roadmap written (ROADMAP-bn.md); CLAUDE.md memory added; link-preview image v3 (white bg); admin tab renamed "পেজের তথ্য"; tsconfig `types` fix; admin editing of photo/headline/villages shipped; first live deploy on owner's fork; env vars set; admin login confirmed working.
