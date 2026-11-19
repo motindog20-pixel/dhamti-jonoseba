@@ -726,7 +726,7 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                   }`}
                 >
                   <Settings className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                  <span>{language === 'bn' ? 'প্রোফাইল ও পিন' : 'Profile & PIN'}</span>
+                  <span>{language === 'bn' ? 'পেজের তথ্য' : 'Page Info'}</span>
                 </button>
               </div>
 
