@@ -59,6 +59,9 @@ Storage/writes are effectively unlimited. **Row reads are the bottleneck**: `get
 7. Run `bun install` locally once and commit `bun.lock` (tsx was moved to dependencies; firebase/@google/genai/playwright are unused and can be removed).
 8. Optional: auto-refresh of open pages (poll every N minutes).
 
-## 9. Log (newest first)
-- 2026-11-19: link-preview image v3 (white bg); admin tab renamed "পেজের তথ্য"; tsconfig `types` fix; admin editing of photo/headline/villages shipped; first live deploy on owner's fork; env vars set; admin login confirmed working.
+## 9. Roadmap
+Six-month plan toward the public release on **1 April 2027** is in `ROADMAP-bn.md` (phases Dec–Mar, launch checklist, risks). Election/campaign date still to be confirmed by the owner. When a phase item ships, tick it off there.
+
+## 10. Log (newest first)
+- 2026-11-19: roadmap written (ROADMAP-bn.md); CLAUDE.md memory added; link-preview image v3 (white bg); admin tab renamed "পেজের তথ্য"; tsconfig `types` fix; admin editing of photo/headline/villages shipped; first live deploy on owner's fork; env vars set; admin login confirmed working.
 - 2026-11-18: privacy model, mandatory fields, phone/code tracking, coming-soon manifesto, mobile action bar, server-side admin auth.
