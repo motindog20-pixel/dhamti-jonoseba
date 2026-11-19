@@ -68,7 +68,7 @@ bun remove firebase @google/genai playwright
 
 ## ৩. কোড কীভাবে GitHub-এ তুলবেন
 জিপ খুলে ভেতরের সব ফাইল আপনার প্রজেক্ট ফোল্ডারে কপি করুন (পুরনো ফাইল রিপ্লেস করুন), তারপর `git add -A`, `git commit`, `git push`।
-মুছে ফেলা ফাইলগুলো আপনার ফোল্ডার থেকেও মুছুন: `firebase-applet-config.json`, `scripts/`, `data/`, `public/assets/`, এবং `public/`-এর বড় ছবিগুলো (শুধু `og-image-v2.jpg`, `leader.jpg` ও আইকন থাকবে)।
+মুছে ফেলা ফাইলগুলো আপনার ফোল্ডার থেকেও মুছুন: `firebase-applet-config.json`, `scripts/`, `data/`, `public/assets/`, এবং `public/`-এর বড় ছবিগুলো (শুধু `og-image-v3.jpg`, `leader.jpg` ও আইকন থাকবে)।
 
 ## ৪. ডিপ্লয়ের পর পরীক্ষা (ফোনে করুন)
 1. `আপনার-সাইট/api/manifesto` খুলুন। `[]` বা JSON এলে সার্ভার চলছে। ত্রুটি এলে ডেটাবেস সেটিং ঠিক নেই।
