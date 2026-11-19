@@ -2023,7 +2023,7 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-neutral-700 mb-1" htmlFor="edit-announcement">
-                        {language === 'bn' ? 'জনবার্তা (নামের নিচে ছোট বার্তা, ফাঁকা রাখলে দেখাবে না)' : 'Public message (optional)'}
+                        {language === 'bn' ? 'হোমপেজের বড় বার্তা (ছবির পাশের বড় লেখা)' : 'Homepage headline message'}
                       </label>
                       <input
                         id="edit-announcement"

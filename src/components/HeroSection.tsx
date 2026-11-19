@@ -258,13 +258,6 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                   {leaderProfile.promise || strings.leaderPromise}
                 </p>
 
-                {/* অ্যাডমিনের লেখা জনবার্তা (ফাঁকা হলে দেখায় না) */}
-                {leaderProfile.heroAnnouncement && (
-                  <p className="text-sm sm:text-base text-neutral-700 mt-2 leading-relaxed">
-                    {leaderProfile.heroAnnouncement}
-                  </p>
-                )}
-
                 {/* Golden accent bar */}
                 <div className="mx-auto w-16 h-1 bg-gradient-to-r from-amber-400 to-amber-500 rounded-full mt-2.5"></div>
               </div>
@@ -347,7 +340,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                 <span>{language === 'bn' ? 'নাগরিক সেবা ও উন্নয়ন অঙ্গীকার' : 'Citizen Service & Development Mission'}</span>
               </div>
               <h2 className="text-xl sm:text-2xl md:text-[1.85rem] font-bold text-neutral-900 leading-snug font-serif-bangla">
-                {strings.heroSlogan}
+                {leaderProfile.heroAnnouncement || strings.heroSlogan}
               </h2>
               <p className="text-sm sm:text-base text-neutral-700 mt-2.5 leading-relaxed font-sans-bangla">
                 {language === 'bn'
