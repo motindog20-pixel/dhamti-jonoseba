@@ -71,9 +71,6 @@ export const Header: React.FC<HeaderProps> = ({
           <a href="#statistics" className="hover:text-emerald-800 transition-colors whitespace-nowrap shrink-0">
             {language === 'bn' ? 'পরিসংখ্যান' : 'Statistics'}
           </a>
-          <a href="#problem-feed" className="hover:text-emerald-800 transition-colors whitespace-nowrap shrink-0">
-            {language === 'bn' ? 'অভিযোগ ও উপদেশ' : 'Grievances & Advice'}
-          </a>
           <button 
             type="button"
             onClick={onOpenTrackModal} 
@@ -137,14 +134,6 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="truncate w-full leading-tight">{language === 'bn' ? 'পরিসংখ্যান' : 'Stats'}</span>
           </a>
 
-          <a
-            href="#problem-feed"
-            className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg text-xs sm:text-xs font-semibold text-neutral-700 hover:text-emerald-900 hover:bg-emerald-50/80 transition-colors min-w-0"
-          >
-            <MessageSquareText className="w-4 h-4 text-emerald-700 mb-0.5 shrink-0" />
-            <span className="truncate w-full leading-tight">{language === 'bn' ? 'অভিযোগ' : 'Feed'}</span>
-          </a>
-
           <button
             type="button"
             onClick={onOpenTrackModal}
@@ -184,15 +173,6 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <BarChart3 className="w-4 h-4 text-emerald-700" />
             <span>{language === 'bn' ? 'এলাকাভিত্তিক পরিসংখ্যান' : 'Ward Statistics'}</span>
-          </a>
-
-          <a
-            href="#problem-feed"
-            onClick={() => handleMobileNavClick()}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-neutral-800 hover:bg-neutral-100 hover:text-emerald-800 transition-colors"
-          >
-            <MessageSquareText className="w-4 h-4 text-emerald-700" />
-            <span>{language === 'bn' ? 'অভিযোগ ও উপদেশ তালিকা' : 'Citizen Feed'}</span>
           </a>
 
           <button

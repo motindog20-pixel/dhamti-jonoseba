@@ -8,12 +8,13 @@ import crypto from 'node:crypto';
 import {
   initDatabase,
   getAllProblems,
-  findProblemByTrackingCode,
   findProblemsByPhone,
+  countRecentByPhone,
   insertProblem,
   updateProblemStatus,
-  upvoteProblem,
+  classifyProblem,
   deleteProblem,
+  getPublicStats,
   getAllManifestoItems,
   insertManifestoItem,
   updateManifestoItem,
@@ -28,24 +29,39 @@ import {
   setSetting,
   getDatabaseStatus,
   isDbPersistent,
+  createSession,
+  getSession,
+  deleteSession,
+  addAudit,
+  listAudit,
+  countAudit,
+  exportBackup,
+  type SessionInfo,
 } from './db.js';
 import {
   isAuthConfigured,
   checkPassword,
-  issueToken,
+  generateTotpSecret,
+  totpVerify,
+  totpUri,
+  newSessionId,
+  hashSessionId,
+  readSessionCookie,
+  SESSION_MS,
   setAdminCookie,
   clearAdminCookie,
-  isAdminRequest,
-  requireAdmin,
   sameOriginOnly,
   securityHeaders,
   rateLimit,
+  failLimiter,
   cleanText,
   cleanPhone,
   ID_PATTERN,
 } from './security.js';
+import { seal, unseal, isEncryptionEnabled } from './crypto.js';
+import { STATUS_ORDER, NOTE_REQUIRED_STATUSES } from '../src/data/statuses.js';
 import { INITIAL_MANIFESTO_ITEMS, MANIFESTO_CATEGORIES_CONFIG } from '../src/data/manifestoData.js';
-import { normalizeBdMobile, toAsciiDigits } from '../src/services/phone.js';
+import { normalizeBdMobile } from '../src/services/phone.js';
 import { INITIAL_AREAS, CATEGORIES } from '../src/data/mockData.js';
 import type {
   ProblemReport,
@@ -61,7 +77,7 @@ import type {
 const WARD_IDS = new Set(INITIAL_AREAS.map((a) => a.wardNumber));
 const CATEGORY_IDS = new Set(CATEGORIES.map((c) => c.id));
 const URGENCY: UrgencyLevel[] = ['normal', 'high', 'critical'];
-const STATUSES: ProblemStatus[] = ['pending', 'reviewing', 'in_progress', 'resolved'];
+const STATUSES: ProblemStatus[] = STATUS_ORDER;
 const MANIFESTO_STATUSES: ManifestoStatus[] = ['planned', 'in_progress', 'completed'];
 const MANIFESTO_CATEGORY_IDS = new Set(Object.keys(MANIFESTO_CATEGORIES_CONFIG));
 
@@ -69,11 +85,23 @@ const ANON_NAME = 'গোপন নাগরিক';
 const DEFAULT_NAME = 'এলাকাবাসী';
 
 /**
- * সবার জন্য দৃশ্যমান রূপ: নাগরিকের নাম ও ফোন নম্বর কখনোই বের হয় না।
- * আসল নাম-নম্বর শুধু অ্যাডমিন (GET /api/admin/problems) দেখতে পায়।
+ * নাগরিকের দেখার রূপ (শুধু মোবাইল নম্বর দিয়ে খোঁজা হয়, তাই কম তথ্য দেখানো হয়):
+ * অভিযোগের শিরোনাম, লেখা ও ঠিকানা এবং নাম/নম্বর কখনোই নয়। দেখা যায় শুধু ধরন, ওয়ার্ড, তারিখ,
+ * ট্র্যাকিং কোড, অবস্থা ও আপনার লেখা নোট। কর্মীর নাম লুকিয়ে "জনসেবা সেল" দেখানো হয়।
  */
-function toPublic(problem: ProblemReport): ProblemReport {
-  return { ...problem, phone: '', citizenName: DEFAULT_NAME };
+function toTrackView(problem: ProblemReport): ProblemReport {
+  return {
+    ...problem,
+    id: problem.trackingCode,
+    title: '',
+    description: '',
+    specificLocation: '',
+    phone: '',
+    citizenName: DEFAULT_NAME,
+    assignedOfficer: undefined,
+    upvotes: 0,
+    timeline: (problem.timeline || []).map((ev) => ({ ...ev, author: 'জনসেবা সেল' })),
+  };
 }
 
 type NewProblemInput = {
@@ -87,11 +115,13 @@ type NewProblemInput = {
   phone: string;
   isAnonymous: boolean;
   urgency: UrgencyLevel;
+  consent: boolean;
 };
 
 function parseNewProblem(body: any): { ok: true; value: NewProblemInput } | { ok: false; error: string } {
   if (!body || typeof body !== 'object') return { ok: false, error: 'তথ্য সঠিক নয়।' };
 
+  if (body.consent !== true) return { ok: false, error: 'গোপনীয়তা নীতি দেখে সম্মতি দিন।' };
   const submissionType: SubmissionType = body.submissionType === 'advice' ? 'advice' : 'complaint';
   const title = cleanText(body.title, 120);
   const description = cleanText(body.description, 1000);
@@ -125,6 +155,7 @@ function parseNewProblem(body: any): { ok: true; value: NewProblemInput } | { ok
       phone,
       isAnonymous: false,
       urgency,
+      consent: true,
     },
   };
 }
@@ -154,14 +185,14 @@ async function createProblemRecord(input: NewProblemInput): Promise<ProblemRepor
       phone: input.phone,
       isAnonymous: input.isAnonymous,
       urgency: input.urgency,
-      status: 'pending',
+      status: 'submitted',
       createdAt: nowIso,
-      upvotes: 1,
+      upvotes: 0,
       timeline: [
         {
           id: `t-${Date.now()}-1`,
           timestamp: nowIso,
-          status: 'pending',
+          status: 'submitted',
           noteBn: isAdvice
             ? 'নাগরিকের মূল্যবান উপদেশ ও পরামর্শ গৃহীত হয়েছে। পর্যালোচনার অপেক্ষায়।'
             : 'নাগরিকের অভিযোগটি গৃহীত হয়েছে। প্রাথমিক পর্যালোচনার অপেক্ষায়।',
@@ -174,7 +205,7 @@ async function createProblemRecord(input: NewProblemInput): Promise<ProblemRepor
     };
 
     try {
-      return await insertProblem(problem);
+      return await insertProblem(problem, nowIso);
     } catch (err: any) {
       if (/UNIQUE|constraint/i.test(String(err?.message))) continue; // কোড মিলে গেলে আবার চেষ্টা
       throw err;
@@ -295,7 +326,7 @@ export function createApp() {
   const smallJson = express.json({ limit: '100kb' });
   const photoJson = express.json({ limit: '700kb' });
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (req.path === '/api/profile/photo' && req.method === 'PUT' && isAdminRequest(req)) return photoJson(req, res, next);
+    if (req.path === '/api/profile/photo' && req.method === 'PUT' && readSessionCookie(req)) return photoJson(req, res, next);
     return smallJson(req, res, next);
   });
   app.use('/api', sameOriginOnly);
@@ -332,98 +363,200 @@ export function createApp() {
     next();
   };
 
+  // ডেটাবেস লাগে এমন সব রুট (লগইন-সেশনও ডেটাবেসে থাকে)
+  app.use('/api', needsDb);
+
+  // সব API-তে মোটা সীমা (অতিরিক্ত অনুরোধ আটকাতে; গ্রামের শেয়ার-করা নেটওয়ার্কের কথা ভেবে উদার)
+  app.use('/api', rateLimit('api', 600, 10 * 60 * 1000, 'অনেক বেশি অনুরোধ হয়েছে। কিছুক্ষণ পরে আবার চেষ্টা করুন।'));
+
   // ==========================================
-  // অ্যাডমিন লগইন
+  // লগইন ও সেশন
   // ==========================================
+  type Staff = SessionInfo;
+
+  async function loadStaff(req: Request): Promise<Staff | null> {
+    const sid = readSessionCookie(req);
+    if (!sid) return null;
+    return getSession(hashSessionId(sid));
+  }
+
+  /** শুধু মূল প্রশাসক (আপনি) */
+  const requireOwner = async (req: Request, res: Response, next: NextFunction) => {
+    if (!isAuthConfigured()) {
+      return res.status(503).json({ error: 'অ্যাডমিন লগইন এখনো সেটআপ করা হয়নি (ADMIN_PASSWORD দিন)।' });
+    }
+    try {
+      const staff = await loadStaff(req);
+      if (!staff || staff.role !== 'owner') return res.status(401).json({ error: 'অ্যাডমিন লগইন প্রয়োজন।' });
+      res.locals.staff = staff;
+      next();
+    } catch (err) {
+      console.error('Session check failed:', err);
+      res.status(500).json({ error: 'যাচাই করা যায়নি।' });
+    }
+  };
+
+  const staffOf = (res: Response) => res.locals.staff as Staff;
+  const audit = (res: Response, action: string, target = '', detail = '') => {
+    const st = staffOf(res);
+    return addAudit({ actor: st.username, role: st.role, action, target, detail });
+  };
+
+  // দুই ধাপের গোপন চাবি: ফাঁকা বা RESET_ADMIN_2FA=true হলে বন্ধ। (null = বন্ধ)
+  async function getTotpSecret(): Promise<string | null> {
+    if (process.env.RESET_ADMIN_2FA === 'true') return null;
+    const v = await getSetting('totp_secret');
+    if (!v) return null;
+    return unseal(v); // চাবি হারালে '' ফেরে; তখনো কোড চাওয়া হয় (নিরাপদ দিক)
+  }
+  const TOTP_LAST = 'totp_last';
+
   app.post(
     '/api/admin/login',
     rateLimit('login', 10, 15 * 60 * 1000, 'অনেকবার ভুল চেষ্টা হয়েছে। ১৫ মিনিট পরে আবার চেষ্টা করুন।'),
-    (req: Request, res: Response) => {
-      if (!isAuthConfigured()) {
-        return res.status(503).json({ error: 'অ্যাডমিন লগইন এখনো সেটআপ করা হয়নি।' });
+    async (req: Request, res: Response) => {
+      try {
+        if (!isAuthConfigured()) {
+          return res.status(503).json({ error: 'অ্যাডমিন লগইন এখনো সেটআপ করা হয়নি।' });
+        }
+        const password = typeof req.body?.password === 'string' ? req.body.password.slice(0, 200) : '';
+        const actor = 'owner';
+
+        // সব IP মিলিয়ে ১৫ মিনিটে ৩০টি ভুল হলে সাময়িক বন্ধ (একই IP থেকে ১০টিতেই আলাদা সীমা আছে)।
+        // সীমা বেশি রাখা হয়েছে যেন অন্য কেউ ইচ্ছে করে ভুল দিয়ে আপনাকে ঢুকতে বাধা দিতে না পারে।
+        const since = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+        if ((await countAudit('login_fail', actor, since)) >= 30) {
+          return res.status(429).json({ error: 'অনেকবার ভুল চেষ্টা হয়েছে। ১৫ মিনিট পরে আবার চেষ্টা করুন।' });
+        }
+        const fail = async (message: string, extra: Record<string, unknown> = {}) => {
+          await addAudit({ actor, role: 'owner', action: 'login_fail' });
+          return res.status(401).json({ error: message, ...extra });
+        };
+
+        if (!checkPassword(password)) return fail('পাসওয়ার্ড সঠিক নয়।');
+        const secret = await getTotpSecret();
+        if (secret !== null) {
+          if (!req.body?.code) {
+            return res.status(401).json({ error: 'দুই ধাপের কোড দিন (অথেনটিকেটর অ্যাপ থেকে ৬ অঙ্ক)।', needs2fa: true });
+          }
+          const last = Number((await getSetting(TOTP_LAST)) || 0);
+          const counter = secret ? totpVerify(secret, req.body.code, last) : null;
+          if (counter === null) return fail('কোডটি সঠিক নয় বা মেয়াদ শেষ।', { needs2fa: true });
+          await setSetting(TOTP_LAST, String(counter));
+        }
+        const info: SessionInfo = { role: 'owner', username: 'owner', displayName: 'মূল প্রশাসক' };
+
+        const sid = newSessionId();
+        const expires = Date.now() + SESSION_MS;
+        await createSession(hashSessionId(sid), info, expires);
+        setAdminCookie(res, sid);
+        await addAudit({ actor: info.username, role: info.role, action: 'login_ok' });
+        res.json({ success: true, expires, role: info.role, displayName: info.displayName });
+      } catch (err) {
+        console.error('Login failed:', err);
+        res.status(500).json({ error: 'লগইন করা যায়নি। আবার চেষ্টা করুন।' });
       }
-      if (!checkPassword(req.body?.password)) {
-        return res.status(401).json({ error: 'পাসওয়ার্ড সঠিক নয়।' });
-      }
-      const { token, expires } = issueToken();
-      setAdminCookie(res, token);
-      res.json({ success: true, expires });
     }
   );
 
-  app.post('/api/admin/logout', (_req: Request, res: Response) => {
+  app.post('/api/admin/logout', async (req: Request, res: Response) => {
+    try {
+      const sid = readSessionCookie(req);
+      if (sid) {
+        const hash = hashSessionId(sid);
+        const staff = await getSession(hash);
+        await deleteSession(hash); // সার্ভারে সেশন মুছে যায়, তাই পুরনো কুকি আর চলবে না
+        if (staff) await addAudit({ actor: staff.username, role: staff.role, action: 'logout' });
+      }
+    } catch (err) {
+      console.error('Logout cleanup failed:', err);
+    }
     clearAdminCookie(res);
     res.json({ success: true });
   });
 
-  app.get('/api/admin/session', (req: Request, res: Response) => {
-    res.json({ authenticated: isAdminRequest(req), configured: isAuthConfigured() });
+  app.get('/api/admin/session', async (req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    let staff: Staff | null = null;
+    try {
+      staff = await loadStaff(req);
+    } catch {
+      staff = null;
+    }
+    const owner = staff?.role === 'owner';
+    res.json({
+      authenticated: Boolean(staff),
+      configured: isAuthConfigured(),
+      role: staff?.role,
+      displayName: staff?.displayName,
+      ...(owner ? { twoFactor: (await getTotpSecret()) !== null, encryption: isEncryptionEnabled() } : {}),
+    });
   });
-
-  // এখান থেকে নিচের সব রুটে ডেটাবেস লাগে
-  app.use('/api', needsDb);
 
   // ==========================================
   // সবার জন্য (পাবলিক)
   // ==========================================
-  app.get('/api/problems', async (_req: Request, res: Response) => {
+
+  // শুধু সমষ্টিগত পরিসংখ্যান (ব্যক্তিগত রেকর্ড নয়; ৫-এর কম সংখ্যা লুকানো)
+  app.get('/api/stats', async (_req: Request, res: Response) => {
     try {
-      const problems = await getAllProblems();
-      res.json(problems.map(toPublic));
+      res.setHeader('Cache-Control', 'public, max-age=30');
+      res.json(await getPublicStats());
     } catch (err) {
-      console.error('Failed to get problems:', err);
-      res.status(500).json({ error: 'তথ্য আনা যায়নি।' });
+      console.error('Failed to get stats:', err);
+      res.status(500).json({ error: 'পরিসংখ্যান আনা যায়নি।' });
     }
   });
 
-  app.post('/api/problems', needsPersistentDb, async (req: Request, res: Response) => {
+  app.post(
+    '/api/problems',
+    rateLimit('submit', 15, 60 * 60 * 1000, 'অল্প সময়ে অনেকগুলো জমা হয়েছে। কিছুক্ষণ পরে আবার চেষ্টা করুন।'),
+    needsPersistentDb,
+    async (req: Request, res: Response) => {
       try {
         const parsed = parseNewProblem(req.body);
         if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+        // একই নম্বর থেকে ২৪ ঘণ্টায় ৮টির বেশি নয় (ভুলবশত বা অপব্যবহারে বারবার জমা ঠেকাতে)
+        const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        if ((await countRecentByPhone(parsed.value.phone, since)) >= 8) {
+          return res.status(429).json({ error: 'এই নম্বর থেকে আজ অনেকগুলো জমা হয়েছে। আগামীকাল আবার চেষ্টা করুন।' });
+        }
         const created = await createProblemRecord(parsed.value);
-        res.status(201).json({ ...toPublic(created), userUpvoted: true });
+        res.status(201).json(toTrackView(created));
       } catch (err) {
         console.error('Failed to create problem:', err);
         res.status(500).json({ error: 'জমা নেওয়া যায়নি। একটু পরে আবার চেষ্টা করুন।' });
       }
-  });
-
-  // নম্বর বা ট্র্যাকিং কোড দিয়ে অভিযোগের অবস্থা (লগইন/OTP ছাড়া)।
-  // শুধু অভিযোগের বিষয় ও অগ্রগতি ফেরত যায়; নাম ও নম্বর কখনোই নয়।
-  app.post('/api/track', async (req: Request, res: Response) => {
-    try {
-      res.setHeader('Cache-Control', 'no-store');
-      const query = cleanText(req.body?.query, 40);
-      if (!query) return res.status(400).json({ error: 'মোবাইল নম্বর বা ট্র্যাকিং কোড লিখুন।' });
-
-      const phone = normalizeBdMobile(query);
-      let found: ProblemReport[] = [];
-      if (phone) {
-        found = await findProblemsByPhone(phone);
-      } else {
-        const one = await findProblemByTrackingCode(toAsciiDigits(query).replace(/\s+/g, ''));
-        if (one) found = [one];
-      }
-      if (found.length === 0) return res.status(404).json({ error: 'not_found' });
-      res.json(found.map(toPublic));
-    } catch (err) {
-      console.error('Track failed:', err);
-      res.status(500).json({ error: 'অনুসন্ধান করা যায়নি। আবার চেষ্টা করুন।' });
     }
-  });
+  );
 
-  app.post('/api/problems/:id/upvote', needsPersistentDb, async (req: Request, res: Response) => {
+  // অভিযোগের অবস্থা: শুধু মোবাইল নম্বর লাগে (কোড নয়)। বেশি ভুল চেষ্টা হলে সাময়িক বন্ধ।
+  const trackFails = failLimiter('trackfail', 8, 15 * 60 * 1000);
+  app.post(
+    '/api/track',
+    rateLimit('track', 30, 10 * 60 * 1000, 'অনেকবার চেষ্টা হয়েছে। কিছুক্ষণ পরে আবার চেষ্টা করুন।'),
+    async (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
-        if (!ID_PATTERN.test(id)) return res.status(400).json({ error: 'ভুল আইডি।' });
-        const delta = req.body?.delta === -1 ? -1 : 1; // শুধু +১ বা −১
-        const count = await upvoteProblem(id, delta);
-        res.json({ id, upvotes: count });
+        res.setHeader('Cache-Control', 'no-store');
+        const wait = trackFails.blocked(req);
+        if (wait) {
+          res.setHeader('Retry-After', String(wait));
+          return res.status(429).json({ error: 'অনেকবার চেষ্টা হয়েছে। ১৫ মিনিট পরে আবার চেষ্টা করুন।' });
+        }
+        const phone = normalizeBdMobile(typeof req.body?.phone === 'string' ? req.body.phone : '');
+        if (!phone) return res.status(400).json({ error: 'সঠিক মোবাইল নম্বর লিখুন (যেমন ০১৭XXXXXXXX)।' });
+        const found = await findProblemsByPhone(phone);
+        if (!found.length) {
+          trackFails.fail(req);
+          return res.status(404).json({ error: 'not_found' });
+        }
+        res.json(found.map(toTrackView));
       } catch (err) {
-        console.error('Failed to upvote problem:', err);
-        res.status(500).json({ error: 'সমর্থন নথিভুক্ত করা যায়নি।' });
+        console.error('Track failed:', err);
+        res.status(500).json({ error: 'অনুসন্ধান করা যায়নি। আবার চেষ্টা করুন।' });
       }
-  });
+    }
+  );
 
   app.get('/api/manifesto', async (_req: Request, res: Response) => {
     try {
@@ -475,9 +608,68 @@ export function createApp() {
   });
 
   // ==========================================
-  // শুধু অ্যাডমিন
+  // অভিযোগ পরিচালনা (শুধু আপনি)
   // ==========================================
-  app.get('/api/status', requireAdmin, async (_req: Request, res: Response) => {
+
+  // নাম-ফোনসহ পূর্ণ তালিকা
+  app.get('/api/admin/problems', requireOwner, async (_req: Request, res: Response) => {
+    try {
+      res.setHeader('Cache-Control', 'no-store');
+      const all = await getAllProblems();
+      // ব্যক্তিগত তথ্য দেখার রেকর্ড (৫ মিনিটে একবার; গোনা-সংখ্যা ছাড়া কিছু লেখা হয় না)
+      const since = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      if ((await countAudit('view_identity', 'owner', since)) === 0) {
+        await audit(res, 'view_identity', '', `${all.length}টি অভিযোগ`);
+      }
+      res.json(all);
+    } catch (err) {
+      console.error('Failed to get admin problems:', err);
+      res.status(500).json({ error: 'তথ্য আনা যায়নি।' });
+    }
+  });
+
+  app.patch('/api/problems/:id', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!ID_PATTERN.test(id)) return res.status(400).json({ error: 'ভুল আইডি।' });
+      const status = req.body?.status as ProblemStatus;
+      if (!STATUSES.includes(status)) return res.status(400).json({ error: 'অবস্থা সঠিক নয়।' });
+      const noteText = cleanText(req.body?.noteText, 500);
+      // যোগাযোগ বা সম্পন্ন দাবি করতে হলে বাস্তব ব্যাখ্যা লিখতেই হবে
+      if (NOTE_REQUIRED_STATUSES.includes(status) && noteText.length < 5) {
+        return res.status(400).json({ error: 'এই অবস্থার জন্য সংক্ষেপে কী করা হয়েছে তা লিখুন (কমপক্ষে ৫ অক্ষর)।' });
+      }
+      const updated = await updateProblemStatus(id, status, noteText, 'মূল প্রশাসক');
+      if (!updated) return res.status(404).json({ error: 'অভিযোগ পাওয়া যায়নি।' });
+      await audit(res, 'status_change', id, `অবস্থা: ${status}`);
+      res.json(updated);
+    } catch (err) {
+      console.error('Failed to update problem status:', err);
+      res.status(500).json({ error: 'হালনাগাদ করা যায়নি।' });
+    }
+  });
+
+  // শ্রেণিবিন্যাস: সমস্যার ধরন ও জরুরি মাত্রা
+  app.patch('/api/problems/:id/classify', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      if (!ID_PATTERN.test(id)) return res.status(400).json({ error: 'ভুল আইডি।' });
+      if (!CATEGORY_IDS.has(req.body?.category)) return res.status(400).json({ error: 'সমস্যার ধরন সঠিক নয়।' });
+      const urgency: UrgencyLevel = URGENCY.includes(req.body?.urgency) ? req.body.urgency : 'normal';
+      const updated = await classifyProblem(id, req.body.category, urgency);
+      if (!updated) return res.status(404).json({ error: 'অভিযোগ পাওয়া যায়নি।' });
+      await audit(res, 'classify', id, `${req.body.category}/${urgency}`);
+      res.json(updated);
+    } catch (err) {
+      console.error('Failed to classify problem:', err);
+      res.status(500).json({ error: 'হালনাগাদ করা যায়নি।' });
+    }
+  });
+
+  // ==========================================
+  // শুধু মূল প্রশাসক
+  // ==========================================
+  app.get('/api/status', requireOwner, async (_req: Request, res: Response) => {
     try {
       res.json(await getDatabaseStatus());
     } catch (err: any) {
@@ -485,40 +677,13 @@ export function createApp() {
     }
   });
 
-  // শুধু অ্যাডমিন: নাম ও ফোনসহ পূর্ণ তালিকা
-  app.get('/api/admin/problems', requireAdmin, async (_req: Request, res: Response) => {
-    try {
-      res.setHeader('Cache-Control', 'no-store');
-      res.json(await getAllProblems());
-    } catch (err) {
-      console.error('Failed to get admin problems:', err);
-      res.status(500).json({ error: 'তথ্য আনা যায়নি।' });
-    }
-  });
-
-  app.patch('/api/problems/:id', requireAdmin, needsPersistentDb, async (req: Request, res: Response) => {
-    try {
-      const { id } = req.params;
-      if (!ID_PATTERN.test(id)) return res.status(400).json({ error: 'ভুল আইডি।' });
-      const status = req.body?.status as ProblemStatus;
-      if (!STATUSES.includes(status)) return res.status(400).json({ error: 'অবস্থা সঠিক নয়।' });
-      const noteText = cleanText(req.body?.noteText, 500);
-      const officerName = cleanText(req.body?.officerName, 80);
-      const updated = await updateProblemStatus(id, status, noteText, officerName);
-      if (!updated) return res.status(404).json({ error: 'অভিযোগ পাওয়া যায়নি।' });
-      res.json(toPublic(updated));
-    } catch (err) {
-      console.error('Failed to update problem status:', err);
-      res.status(500).json({ error: 'হালনাগাদ করা যায়নি।' });
-    }
-  });
-
-  app.delete('/api/problems/:id', requireAdmin, needsPersistentDb, async (req: Request, res: Response) => {
+  app.delete('/api/problems/:id', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       if (!ID_PATTERN.test(id)) return res.status(400).json({ error: 'ভুল আইডি।' });
       const success = await deleteProblem(id);
       if (!success) return res.status(404).json({ error: 'অভিযোগ পাওয়া যায়নি।' });
+      await audit(res, 'delete_problem', id);
       res.json({ success: true, id });
     } catch (err) {
       console.error('Failed to delete problem:', err);
@@ -526,7 +691,88 @@ export function createApp() {
     }
   });
 
-  app.post('/api/manifesto', requireAdmin, needsPersistentDb, async (req: Request, res: Response) => {
+  // --- মূল প্রশাসকের দুই ধাপের লগইন (অথেনটিকেটর অ্যাপ) ---
+  app.post('/api/admin/2fa/setup', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
+    try {
+      if (!checkPassword(req.body?.password)) return res.status(401).json({ error: 'পাসওয়ার্ড সঠিক নয়।' });
+      if ((await getTotpSecret()) !== null) return res.status(400).json({ error: 'দুই ধাপের লগইন আগেই চালু আছে।' });
+      const secret = generateTotpSecret();
+      await setSetting('totp_pending', seal(secret));
+      res.json({ secret, uri: totpUri(secret, 'owner') });
+    } catch (err) {
+      console.error('2FA setup failed:', err);
+      res.status(500).json({ error: 'চালু করা যায়নি।' });
+    }
+  });
+
+  app.post('/api/admin/2fa/enable', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
+    try {
+      const pending = unseal((await getSetting('totp_pending')) || '');
+      if (!pending) return res.status(400).json({ error: 'আগে "চালু করুন" চাপুন।' });
+      const counter = totpVerify(pending, req.body?.code, 0);
+      if (counter === null) return res.status(400).json({ error: 'কোডটি সঠিক নয়। অ্যাপের বর্তমান ৬ অঙ্ক দিন।' });
+      await setSetting('totp_secret', seal(pending));
+      await setSetting('totp_pending', '');
+      await setSetting(TOTP_LAST, String(counter));
+      await audit(res, '2fa_enable');
+      res.json({ success: true });
+    } catch (err) {
+      console.error('2FA enable failed:', err);
+      res.status(500).json({ error: 'চালু করা যায়নি।' });
+    }
+  });
+
+  app.post('/api/admin/2fa/disable', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
+    try {
+      if (!checkPassword(req.body?.password)) return res.status(401).json({ error: 'পাসওয়ার্ড সঠিক নয়।' });
+      const secret = await getTotpSecret();
+      if (secret === null) return res.status(400).json({ error: 'দুই ধাপের লগইন চালু নেই।' });
+      const last = Number((await getSetting(TOTP_LAST)) || 0);
+      if (!secret || totpVerify(secret, req.body?.code, last) === null) {
+        return res.status(400).json({ error: 'কোডটি সঠিক নয়।' });
+      }
+      await setSetting('totp_secret', '');
+      await audit(res, '2fa_disable');
+      res.json({ success: true });
+    } catch (err) {
+      console.error('2FA disable failed:', err);
+      res.status(500).json({ error: 'বন্ধ করা যায়নি।' });
+    }
+  });
+
+  // --- নিরীক্ষা-খাতা (শুধু পড়া যায়) ---
+  app.get('/api/admin/audit', requireOwner, async (req: Request, res: Response) => {
+    try {
+      res.setHeader('Cache-Control', 'no-store');
+      res.json(await listAudit(Number(req.query?.limit) || 200));
+    } catch (err) {
+      console.error('Failed to read audit log:', err);
+      res.status(500).json({ error: 'খাতা আনা যায়নি।' });
+    }
+  });
+
+  // CSV নামানোর আগে ফ্রন্টএন্ড এটি ডাকে, যেন "কে কখন নামাল" খাতায় থাকে
+  app.post('/api/admin/export-log', requireOwner, async (_req: Request, res: Response) => {
+    await audit(res, 'export_csv');
+    res.json({ success: true });
+  });
+
+  // --- ব্যাকআপ (নাম-ফোনসহ সব; শুধু মূল প্রশাসক) ---
+  app.get('/api/admin/backup', requireOwner, async (_req: Request, res: Response) => {
+    try {
+      const data = await exportBackup();
+      await audit(res, 'backup_download', '', `${data.problems.length}টি অভিযোগ`);
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="dhamti-backup-${new Date().toISOString().slice(0, 10)}.json"`);
+      res.send(JSON.stringify(data, null, 2));
+    } catch (err) {
+      console.error('Backup failed:', err);
+      res.status(500).json({ error: 'ব্যাকআপ নেওয়া যায়নি।' });
+    }
+  });
+
+  app.post('/api/manifesto', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
     try {
       const item = parseManifestoItem(req.body);
       if (!item) return res.status(400).json({ error: 'ইশতেহারের তথ্য সঠিক নয়।' });
@@ -537,7 +783,7 @@ export function createApp() {
     }
   });
 
-  app.put('/api/manifesto/:id', requireAdmin, needsPersistentDb, async (req: Request, res: Response) => {
+  app.put('/api/manifesto/:id', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
     try {
       const item = parseManifestoItem(req.body, req.params.id);
       if (!item) return res.status(400).json({ error: 'ইশতেহারের তথ্য সঠিক নয়।' });
@@ -548,7 +794,7 @@ export function createApp() {
     }
   });
 
-  app.delete('/api/manifesto/:id', requireAdmin, needsPersistentDb, async (req: Request, res: Response) => {
+  app.delete('/api/manifesto/:id', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       if (!ID_PATTERN.test(id)) return res.status(400).json({ error: 'ভুল আইডি।' });
@@ -561,7 +807,7 @@ export function createApp() {
     }
   });
 
-  app.delete('/api/manifesto-completed/bulk', requireAdmin, needsPersistentDb, async (_req: Request, res: Response) => {
+  app.delete('/api/manifesto-completed/bulk', requireOwner, needsPersistentDb, async (_req: Request, res: Response) => {
     try {
       res.json({ success: true, deletedCount: await deleteCompletedManifestos() });
     } catch (err) {
@@ -570,7 +816,7 @@ export function createApp() {
     }
   });
 
-  app.post('/api/manifesto/reset', requireAdmin, needsPersistentDb, async (_req: Request, res: Response) => {
+  app.post('/api/manifesto/reset', requireOwner, needsPersistentDb, async (_req: Request, res: Response) => {
     try {
       res.json(await resetManifestoItems(INITIAL_MANIFESTO_ITEMS));
     } catch (err) {
@@ -579,7 +825,7 @@ export function createApp() {
     }
   });
 
-  app.put('/api/profile', requireAdmin, needsPersistentDb, async (req: Request, res: Response) => {
+  app.put('/api/profile', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
     try {
       const profile = parseProfile(req.body);
       if (!profile) return res.status(400).json({ error: 'প্রোফাইলের তথ্য সঠিক নয়।' });
@@ -590,7 +836,7 @@ export function createApp() {
     }
   });
 
-  app.put('/api/profile/photo', requireAdmin, needsPersistentDb, async (req: Request, res: Response) => {
+  app.put('/api/profile/photo', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
     try {
       const dataUrl = parsePhotoDataUrl(req.body?.image);
       if (!dataUrl) {
@@ -603,7 +849,7 @@ export function createApp() {
     }
   });
 
-  app.delete('/api/profile/photo', requireAdmin, needsPersistentDb, async (_req: Request, res: Response) => {
+  app.delete('/api/profile/photo', requireOwner, needsPersistentDb, async (_req: Request, res: Response) => {
     try {
       res.json(await setLeaderPhoto(null));
     } catch (err) {
@@ -612,7 +858,7 @@ export function createApp() {
     }
   });
 
-  app.put('/api/settings', requireAdmin, needsPersistentDb, async (req: Request, res: Response) => {
+  app.put('/api/settings', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
     try {
       const villages = parseWardVillages(req.body);
       if (!villages) return res.status(400).json({ error: 'সেটিংসের তথ্য সঠিক নয়।' });

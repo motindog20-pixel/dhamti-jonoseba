@@ -21,7 +21,7 @@ interface HeroSectionProps {
   onOpenReportModal: () => void;
   onOpenTrackModal: () => void;
   totalProblemsCount: number;
-  resolvedProblemsCount: number;
+  resolvedProblemsCount: number | null;
   leaderProfile: LeaderProfile;
 }
 
@@ -404,7 +404,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                     {language === 'bn' ? 'মোট নাগরিক আবেদন' : 'Total Submissions'}
                   </span>
                   <span className="text-2xl sm:text-3xl font-extrabold text-emerald-950 font-mono-num mt-1 block">
-                    {totalProblemsCount}
+                    {totalProblemsCount.toLocaleString(language === 'bn' ? 'bn-BD' : 'en-US')}
                   </span>
                 </div>
                 <div className="w-10 h-10 rounded-xl bg-emerald-100/90 flex items-center justify-center text-emerald-800 shrink-0">
@@ -415,10 +415,10 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
               <div className="bg-white/90 backdrop-blur-md border border-emerald-200/80 rounded-2xl p-4 flex items-center justify-between shadow-xs">
                 <div>
                   <span className="text-xs font-semibold text-emerald-800 uppercase tracking-wider block">
-                    {language === 'bn' ? 'সফল সমাধানকৃত' : 'Resolved Grievances'}
+                    {language === 'bn' ? 'পর্যালোচনা সম্পন্ন' : 'Reviews Completed'}
                   </span>
                   <span className="text-2xl sm:text-3xl font-extrabold text-emerald-700 font-mono-num mt-1 block">
-                    {resolvedProblemsCount}
+                    {resolvedProblemsCount === null ? (language === 'bn' ? '৫-এর কম' : '<5') : resolvedProblemsCount.toLocaleString(language === 'bn' ? 'bn-BD' : 'en-US')}
                   </span>
                 </div>
                 <div className="w-10 h-10 rounded-xl bg-emerald-100/90 flex items-center justify-center text-emerald-700 shrink-0">

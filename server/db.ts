@@ -6,6 +6,10 @@ import type { ProblemReport, ManifestoItem, LeaderProfile } from '../src/types/i
 import { DEFAULT_PROFILE } from '../src/data/mockData.js';
 import { INITIAL_MANIFESTO_ITEMS, LEGACY_DEMO_MANIFESTO } from '../src/data/manifestoData.js';
 import { normalizeBdMobile } from '../src/services/phone.js';
+import { seal, unseal, isSealed, isEncryptionEnabled, phoneBlindIndex, phoneIndexScheme } from './crypto.js';
+import { LEGACY_STATUS_MAP } from '../src/data/statuses.js';
+import { INITIAL_AREAS, CATEGORIES } from '../src/data/mockData.js';
+import type { ProblemStatus, PublicStats, StaffRole } from '../src/types/index.js';
 
 dotenv.config();
 
@@ -59,13 +63,45 @@ export async function initDatabase() {
       phone TEXT DEFAULT '',
       is_anonymous INTEGER NOT NULL DEFAULT 0,
       urgency TEXT NOT NULL DEFAULT 'normal',
-      status TEXT NOT NULL DEFAULT 'pending',
+      status TEXT NOT NULL DEFAULT 'submitted',
       created_at TEXT NOT NULL,
       upvotes INTEGER NOT NULL DEFAULT 0,
       timeline TEXT NOT NULL DEFAULT '[]',
       assigned_officer TEXT DEFAULT '',
       resolution_note TEXT DEFAULT ''
     );
+  `);
+
+  // 1b. সেশন ও নিরীক্ষা-খাতা
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS admin_sessions (
+      id_hash TEXT PRIMARY KEY,
+      role TEXT NOT NULL,
+      username TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+  `);
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      role TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target TEXT NOT NULL DEFAULT '',
+      detail TEXT NOT NULL DEFAULT ''
+    );
+  `);
+  // নিরীক্ষা-খাতা শুধু যোগ করা যায়; বদলানো বা মোছা ডেটাবেস নিজেই আটকায় (অ্যাডমিনও পারেন না)
+  await db.execute(`
+    CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log
+    BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
+  `);
+  await db.execute(`
+    CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log
+    BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
   `);
 
   // 2. Manifesto Items table
@@ -206,12 +242,21 @@ export async function initDatabase() {
     }
   }
 
+  await runProblemMigrations();
+
   console.log('[Turso DB] Tables and seeds initialized successfully.');
 }
 
 // ==========================================
-// PROBLEMS CRUD OPERATIONS
+// PROBLEMS (অভিযোগ) — সংবেদনশীল ঘরগুলো এনক্রিপ্ট হয়ে থাকে (server/crypto.ts)
 // ==========================================
+
+const SENSITIVE_PROBLEM_FIELDS = ['title', 'description', 'specific_location', 'citizen_name', 'phone'] as const;
+
+let statsCache: { at: number; value: PublicStats } | null = null;
+export function invalidateStatsCache() {
+  statsCache = null;
+}
 
 function rowToProblem(row: Record<string, unknown>): ProblemReport {
   let timeline: ProblemReport['timeline'] = [];
@@ -224,13 +269,13 @@ function rowToProblem(row: Record<string, unknown>): ProblemReport {
     id: String(row.id),
     trackingCode: String(row.tracking_code),
     submissionType: row.submission_type as ProblemReport['submissionType'],
-    title: String(row.title),
-    description: String(row.description),
+    title: unseal(String(row.title ?? '')),
+    description: unseal(String(row.description ?? '')),
     category: String(row.category),
     ward: String(row.ward),
-    specificLocation: String(row.specific_location ?? ''),
-    citizenName: String(row.citizen_name ?? ''),
-    phone: String(row.phone ?? ''),
+    specificLocation: unseal(String(row.specific_location ?? '')),
+    citizenName: unseal(String(row.citizen_name ?? '')),
+    phone: unseal(String(row.phone ?? '')),
     isAnonymous: Boolean(row.is_anonymous),
     urgency: row.urgency as ProblemReport['urgency'],
     status: row.status as ProblemReport['status'],
@@ -238,7 +283,7 @@ function rowToProblem(row: Record<string, unknown>): ProblemReport {
     upvotes: Number(row.upvotes ?? 0),
     timeline,
     assignedOfficer: row.assigned_officer ? String(row.assigned_officer) : undefined,
-    resolutionNote: row.resolution_note ? String(row.resolution_note) : undefined,
+    resolutionNote: row.resolution_note ? unseal(String(row.resolution_note)) : undefined,
   };
 }
 
@@ -247,40 +292,46 @@ export async function getAllProblems(): Promise<ProblemReport[]> {
   return result.rows.map((row) => rowToProblem(row as unknown as Record<string, unknown>));
 }
 
-export async function findProblemByTrackingCode(code: string): Promise<ProblemReport | null> {
-  const result = await db.execute({
-    sql: `SELECT * FROM problems WHERE LOWER(tracking_code) = LOWER(?) LIMIT 1`,
-    args: [code],
-  });
-  return result.rows.length ? rowToProblem(result.rows[0] as unknown as Record<string, unknown>) : null;
-}
-
-/** একই নম্বরের সব অভিযোগ (নতুনটি আগে)। পুরনো সারির নম্বর ভিন্ন ধাঁচে থাকলেও মেলে। */
+/** মোবাইল নম্বর মিললে সেই নম্বরের অভিযোগগুলো (নতুন আগে, সর্বোচ্চ ২০টি)। DB-তে নম্বর খোঁজা হয় ব্লাইন্ড ইনডেক্সে। */
 export async function findProblemsByPhone(normalizedPhone: string): Promise<ProblemReport[]> {
-  const result = await db.execute(`SELECT * FROM problems WHERE phone != '' ORDER BY created_at DESC`);
-  return result.rows
-    .map((row) => rowToProblem(row as unknown as Record<string, unknown>))
-    .filter((p) => normalizeBdMobile(p.phone) === normalizedPhone);
+  const hash = phoneBlindIndex(normalizedPhone);
+  if (!hash) return [];
+  const result = await db.execute({
+    sql: `SELECT * FROM problems WHERE phone_hash = ? ORDER BY created_at DESC LIMIT 20`,
+    args: [hash],
+  });
+  return result.rows.map((row) => rowToProblem(row as unknown as Record<string, unknown>));
 }
 
-export async function insertProblem(problem: ProblemReport): Promise<ProblemReport> {
+/** একই নম্বর থেকে গত সময়ে কতটি জমা হয়েছে (জমার সীমা ঠিক করতে) */
+export async function countRecentByPhone(normalizedPhone: string, sinceIso: string): Promise<number> {
+  const hash = phoneBlindIndex(normalizedPhone);
+  if (!hash) return 0;
+  const result = await db.execute({
+    sql: `SELECT COUNT(*) AS c FROM problems WHERE phone_hash = ? AND created_at >= ?`,
+    args: [hash, sinceIso],
+  });
+  return Number(result.rows[0]?.c ?? 0);
+}
+
+export async function insertProblem(problem: ProblemReport, consentAt = ''): Promise<ProblemReport> {
   await db.execute({
     sql: `
       INSERT INTO problems (
-        id, tracking_code, submission_type, title, description, category, ward, specific_location, citizen_name, phone, is_anonymous, urgency, status, created_at, upvotes, timeline, assigned_officer, resolution_note
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, tracking_code, submission_type, title, description, category, ward, specific_location, citizen_name, phone, is_anonymous, urgency, status, created_at, upvotes, timeline, assigned_officer, resolution_note, phone_hash, consent_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     args: [
       problem.id,
       problem.trackingCode,
       problem.submissionType,
-      problem.title,
-      problem.description,
+      seal(problem.title),
+      seal(problem.description),
       problem.category,
       problem.ward,
-      problem.specificLocation || '',
-      problem.citizenName || '',
-      problem.phone || '',
+      seal(problem.specificLocation || ''),
+      seal(problem.citizenName || ''),
+      seal(problem.phone || ''),
       problem.isAnonymous ? 1 : 0,
       problem.urgency,
       problem.status,
@@ -288,22 +339,39 @@ export async function insertProblem(problem: ProblemReport): Promise<ProblemRepo
       problem.upvotes || 0,
       JSON.stringify(problem.timeline || []),
       problem.assignedOfficer || '',
-      problem.resolutionNote || '',
+      seal(problem.resolutionNote || ''),
+      phoneBlindIndex(normalizeBdMobile(problem.phone) || ''),
+      consentAt,
     ],
   });
+  invalidateStatsCache();
   return problem;
 }
 
+const DEFAULT_STATUS_NOTE_BN: Record<ProblemStatus, string> = {
+  submitted: 'আপনার অভিযোগটি গৃহীত হয়েছে।',
+  under_review: 'আবেদনটি পর্যালোচনাধীন রয়েছে।',
+  need_info: 'অতিরিক্ত তথ্য প্রয়োজন।',
+  guidance_given: 'প্রয়োজনীয় তথ্য বা দিকনির্দেশনা দেওয়া হয়েছে।',
+  contacted: 'আপনার সাথে যোগাযোগ করা হয়েছে।',
+  review_done: 'পর্যালোচনা সম্পন্ন হয়েছে।',
+};
+const DEFAULT_STATUS_NOTE_EN: Record<ProblemStatus, string> = {
+  submitted: 'Your report has been received.',
+  under_review: 'The report is under review.',
+  need_info: 'More information is needed.',
+  guidance_given: 'Information or guidance has been provided.',
+  contacted: 'You have been contacted.',
+  review_done: 'Review has been completed.',
+};
+
 export async function updateProblemStatus(
   id: string,
-  newStatus: ProblemReport['status'],
+  newStatus: ProblemStatus,
   noteText: string,
-  officerName: string
+  authorName: string
 ): Promise<ProblemReport | null> {
-  const existing = await db.execute({
-    sql: `SELECT * FROM problems WHERE id = ?`,
-    args: [id],
-  });
+  const existing = await db.execute({ sql: `SELECT * FROM problems WHERE id = ?`, args: [id] });
   if (existing.rows.length === 0) return null;
 
   const row = existing.rows[0];
@@ -314,57 +382,395 @@ export async function updateProblemStatus(
     timeline = [];
   }
 
-  const newEvent = {
+  timeline.push({
     id: `ev-${Date.now()}`,
     timestamp: new Date().toISOString(),
     status: newStatus,
-    noteBn: noteText || (newStatus === 'resolved' ? 'সমস্যাটির সফল সমাধান সম্পন্ন হয়েছে।' : 'আবেদনটি যাচাই-বাছাই প্রক্রিয়ায় রয়েছে।'),
-    noteEn: noteText || (newStatus === 'resolved' ? 'Problem officially resolved.' : 'Issue is under review.'),
-    author: officerName || 'মোঃ আনোয়ার হোসেন ভূঁইয়া (জনসেবা সেল)',
-  };
-
-  timeline.push(newEvent);
+    noteBn: noteText || DEFAULT_STATUS_NOTE_BN[newStatus],
+    noteEn: noteText || DEFAULT_STATUS_NOTE_EN[newStatus],
+    author: authorName || 'জনসেবা সেল',
+  });
 
   await db.execute({
-    sql: `
-      UPDATE problems
-      SET status = ?, timeline = ?, assigned_officer = ?, resolution_note = ?
-      WHERE id = ?
-    `,
+    sql: `UPDATE problems SET status = ?, timeline = ?, assigned_officer = ?, resolution_note = ? WHERE id = ?`,
     args: [
       newStatus,
       JSON.stringify(timeline),
-      officerName || (row.assigned_officer as string) || '',
-      noteText || (row.resolution_note as string) || '',
+      authorName || (row.assigned_officer as string) || '',
+      noteText ? seal(noteText) : (row.resolution_note as string) || '',
       id,
     ],
   });
+  invalidateStatsCache();
 
-  const updated = await db.execute({
-    sql: `SELECT * FROM problems WHERE id = ?`,
-    args: [id],
-  });
+  const updated = await db.execute({ sql: `SELECT * FROM problems WHERE id = ?`, args: [id] });
   return rowToProblem(updated.rows[0] as unknown as Record<string, unknown>);
 }
 
-export async function upvoteProblem(id: string, delta: number): Promise<number> {
-  await db.execute({
-    sql: `UPDATE problems SET upvotes = MAX(0, upvotes + ?) WHERE id = ?`,
-    args: [delta, id],
-  });
-  const res = await db.execute({
-    sql: `SELECT upvotes FROM problems WHERE id = ?`,
-    args: [id],
-  });
-  return Number(res.rows[0]?.upvotes ?? 0);
+/** শ্রেণিবিন্যাস: সমস্যার ধরন ও জরুরি মাত্রা বদল */
+export async function classifyProblem(id: string, category: string, urgency: string): Promise<ProblemReport | null> {
+  const res = await db.execute({ sql: `UPDATE problems SET category = ?, urgency = ? WHERE id = ?`, args: [category, urgency, id] });
+  if (res.rowsAffected === 0) return null;
+  invalidateStatsCache();
+  const updated = await db.execute({ sql: `SELECT * FROM problems WHERE id = ?`, args: [id] });
+  return rowToProblem(updated.rows[0] as unknown as Record<string, unknown>);
 }
 
 export async function deleteProblem(id: string): Promise<boolean> {
-  const res = await db.execute({
-    sql: `DELETE FROM problems WHERE id = ?`,
-    args: [id],
-  });
+  const res = await db.execute({ sql: `DELETE FROM problems WHERE id = ?`, args: [id] });
+  invalidateStatsCache();
   return res.rowsAffected > 0;
+}
+
+// ==========================================
+// পাবলিক পরিসংখ্যান (ব্যক্তিগত রেকর্ড থেকে আলাদা, শুধু সমষ্টি)
+// ==========================================
+
+/** কোনো ঘরে এর কম অভিযোগ থাকলে সংখ্যা প্রকাশ হয় না (ছোট নমুনা থেকে পরিচয় অনুমান ঠেকাতে) */
+export const MIN_PUBLIC_COUNT = 5;
+const STATS_TTL_MS = 30_000;
+
+export async function getPublicStats(): Promise<PublicStats> {
+  if (statsCache && Date.now() - statsCache.at < STATS_TTL_MS) return statsCache.value;
+
+  const grouped = await db.execute(`SELECT ward, category, status, COUNT(*) AS c FROM problems GROUP BY ward, category, status`);
+  const months = await db.execute(`SELECT SUBSTR(created_at, 1, 7) AS m, COUNT(*) AS c FROM problems GROUP BY SUBSTR(created_at, 1, 7) ORDER BY m DESC LIMIT 12`);
+
+  let total = 0;
+  const byStatus: Record<string, number> = {};
+  const byWard: Record<string, number> = {};
+  const byCategory: Record<string, number> = {};
+  const byWardCategory: Record<string, Record<string, number>> = {};
+  for (const r of grouped.rows) {
+    const c = Number(r.c);
+    const ward = String(r.ward);
+    const cat = String(r.category);
+    total += c;
+    byStatus[String(r.status)] = (byStatus[String(r.status)] || 0) + c;
+    byWard[ward] = (byWard[ward] || 0) + c;
+    byCategory[cat] = (byCategory[cat] || 0) + c;
+    (byWardCategory[ward] ||= {})[cat] = ((byWardCategory[ward] || {})[cat] || 0) + c;
+  }
+
+  const hide = (n: number | undefined): number | null => (n && n >= MIN_PUBLIC_COUNT ? n : null);
+  const categoryIds = new Set<string>(CATEGORIES.map((c) => c.id));
+
+  /**
+   * ধরন অনুযায়ী ভাগ: ৫-এর কম ঘর "অন্যান্য"-তে মেশে। অন্যান্য-এর যোগফল ১–৪ হলে সবচেয়ে ছোট দৃশ্যমান ঘরটিও
+   * সেখানে মিশিয়ে দেওয়া হয়, নইলে মোট থেকে বিয়োগ করে ছোট ঘরের সংখ্যা বের করা যেত।
+   */
+  const bucketize = (counts: Record<string, number>) => {
+    const visible: { id: string; count: number }[] = [];
+    let rest = 0;
+    for (const [id, n] of Object.entries(counts)) {
+      if (n >= MIN_PUBLIC_COUNT && categoryIds.has(id)) visible.push({ id, count: n });
+      else rest += n;
+    }
+    visible.sort((a, b) => a.count - b.count);
+    while (rest > 0 && rest < MIN_PUBLIC_COUNT && visible.length) rest += visible.shift()!.count;
+    visible.sort((a, b) => b.count - a.count);
+    return { items: visible, other: rest === 0 ? 0 : rest >= MIN_PUBLIC_COUNT ? rest : null };
+  };
+
+  const overall = bucketize(byCategory);
+  const categories = overall.items;
+  const wards = INITIAL_AREAS.map((a) => {
+    const b = bucketize(byWardCategory[a.wardNumber] || {});
+    return { ward: a.wardNumber, total: hide(byWard[a.wardNumber]), categories: b.items, otherCount: b.other };
+  });
+
+  const value: PublicStats = {
+    generatedAt: new Date().toISOString(),
+    total,
+    reviewDone: hide(byStatus['review_done']),
+    underReview: hide(
+      (byStatus['under_review'] || 0) + (byStatus['need_info'] || 0) + (byStatus['guidance_given'] || 0) + (byStatus['contacted'] || 0)
+    ),
+    submitted: hide(byStatus['submitted']),
+    wards,
+    categories,
+    otherSmallCategories: overall.other,
+    // শুধু মাস (দিন নয়), আর ৫-এর কম হলে মাসটিই বাদ
+    monthly: months.rows
+      .map((r) => ({ month: String(r.m), count: Number(r.c) }))
+      .filter((m) => m.count >= MIN_PUBLIC_COUNT)
+      .reverse(),
+  };
+  statsCache = { at: Date.now(), value };
+  return value;
+}
+
+// ==========================================
+// মাইগ্রেশন: নতুন কলাম, পুরনো অবস্থা, এনক্রিপশন, ফোন-সূচক
+// ==========================================
+
+async function columnNames(table: string): Promise<Set<string>> {
+  const res = await db.execute(`PRAGMA table_info(${table})`);
+  return new Set(res.rows.map((r) => String(r.name)));
+}
+
+async function runProblemMigrations() {
+  const cols = await columnNames('problems');
+  if (!cols.has('phone_hash')) await db.execute(`ALTER TABLE problems ADD COLUMN phone_hash TEXT NOT NULL DEFAULT ''`);
+  if (!cols.has('consent_at')) await db.execute(`ALTER TABLE problems ADD COLUMN consent_at TEXT NOT NULL DEFAULT ''`);
+  await db.execute(`CREATE INDEX IF NOT EXISTS idx_problems_phone_hash ON problems (phone_hash)`);
+  await db.execute(`CREATE INDEX IF NOT EXISTS idx_problems_ward ON problems (ward)`);
+  await db.execute(`CREATE INDEX IF NOT EXISTS idx_problems_created ON problems (created_at)`);
+  await db.execute(`CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log (at)`);
+
+  // পুরনো চার অবস্থা → নতুন ছয় অবস্থা (একবার)
+  if ((await getSetting('mig_status_v2')) !== 'done') {
+    const rows = await db.execute(`SELECT id, status, timeline FROM problems`);
+    for (const r of rows.rows) {
+      const oldStatus = String(r.status);
+      let timeline: any[] = [];
+      try {
+        timeline = JSON.parse(String(r.timeline || '[]'));
+      } catch {
+        timeline = [];
+      }
+      let changed = false;
+      for (const ev of timeline) {
+        if (ev && LEGACY_STATUS_MAP[ev.status]) {
+          ev.status = LEGACY_STATUS_MAP[ev.status];
+          changed = true;
+        }
+      }
+      const newStatus = LEGACY_STATUS_MAP[oldStatus] || oldStatus;
+      if (changed || newStatus !== oldStatus) {
+        await db.execute({
+          sql: `UPDATE problems SET status = ?, timeline = ? WHERE id = ?`,
+          args: [newStatus, JSON.stringify(timeline), r.id as string],
+        });
+      }
+    }
+    await setSetting('mig_status_v2', 'done');
+  }
+
+  await rebuildProtectedColumns();
+}
+
+/**
+ * ফোন-সূচক বানানো ও (চাবি থাকলে) নাম/ফোন/লেখা এনক্রিপ্ট করা।
+ * কাজ বাকি না থাকলে শুধু একটি ছোট প্রশ্ন চালিয়ে ফিরে যায়।
+ */
+export async function rebuildProtectedColumns() {
+  const scheme = phoneIndexScheme();
+  const schemeChanged = (await getSetting('phone_index_scheme')) !== scheme;
+  const encOn = isEncryptionEnabled();
+
+  const pending = await db.execute(
+    `SELECT COUNT(*) AS c FROM problems WHERE (phone_hash = '' AND phone != '')` +
+      (encOn
+        ? ` OR (phone != '' AND phone NOT LIKE 'enc1:%') OR (citizen_name != '' AND citizen_name NOT LIKE 'enc1:%')` +
+          ` OR (description != '' AND description NOT LIKE 'enc1:%') OR (title != '' AND title NOT LIKE 'enc1:%')`
+        : '')
+  );
+  if (!schemeChanged && Number(pending.rows[0]?.c ?? 0) === 0) return;
+
+  const rows = await db.execute(`SELECT * FROM problems`);
+  for (const r of rows.rows) {
+    const rec = r as unknown as Record<string, unknown>;
+    const plain: Record<string, string> = {};
+    let readable = true;
+    for (const f of SENSITIVE_PROBLEM_FIELDS) {
+      const raw = String(rec[f] ?? '');
+      const v = unseal(raw);
+      if (raw !== '' && isSealed(raw) && v === '') readable = false; // চাবি নেই/ভুল: ছুঁই না
+      plain[f] = v;
+    }
+    if (!readable) continue;
+    const resRaw = String(rec.resolution_note ?? '');
+    const res = unseal(resRaw);
+    await db.execute({
+      sql: `UPDATE problems SET title = ?, description = ?, specific_location = ?, citizen_name = ?, phone = ?, resolution_note = ?, phone_hash = ? WHERE id = ?`,
+      args: [
+        seal(plain.title),
+        seal(plain.description),
+        seal(plain.specific_location),
+        seal(plain.citizen_name),
+        seal(plain.phone),
+        seal(res),
+        phoneBlindIndex(normalizeBdMobile(plain.phone) || ''),
+        String(rec.id),
+      ],
+    });
+  }
+  await setSetting('phone_index_scheme', scheme);
+}
+
+// ==========================================
+// সেশন (ডেটাবেসে শুধু আইডির হ্যাশ; লগআউটে মুছে যায়)
+// ==========================================
+
+export interface SessionInfo {
+  role: StaffRole;
+  username: string;
+  displayName: string;
+}
+
+export async function createSession(idHash: string, info: SessionInfo, expiresAt: number): Promise<void> {
+  await db.execute({ sql: `DELETE FROM admin_sessions WHERE expires_at < ?`, args: [Date.now()] });
+  await db.execute({
+    sql: `INSERT INTO admin_sessions (id_hash, role, username, display_name, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    args: [idHash, info.role, info.username, info.displayName, new Date().toISOString(), expiresAt],
+  });
+}
+
+/** বৈধ সেশন ফেরত দেয় (মেয়াদ শেষ বা লগআউট হলে null) */
+export async function getSession(idHash: string): Promise<SessionInfo | null> {
+  const res = await db.execute({ sql: `SELECT role, username, display_name, expires_at FROM admin_sessions WHERE id_hash = ?`, args: [idHash] });
+  if (!res.rows.length) return null;
+  const r = res.rows[0];
+  if (Number(r.expires_at) <= Date.now()) {
+    await db.execute({ sql: `DELETE FROM admin_sessions WHERE id_hash = ?`, args: [idHash] });
+    return null;
+  }
+  const role = String(r.role) as StaffRole;
+  const username = String(r.username);
+  return { role, username, displayName: String(r.display_name) };
+}
+
+export async function deleteSession(idHash: string): Promise<void> {
+  await db.execute({ sql: `DELETE FROM admin_sessions WHERE id_hash = ?`, args: [idHash] });
+}
+
+// ==========================================
+// নিরীক্ষা-খাতা (কে কী করেছে)। এখানে কখনো নাম, ফোন বা অভিযোগের লেখা রাখা হয় না।
+// ==========================================
+
+export interface AuditEntry {
+  id: number;
+  at: string;
+  actor: string;
+  role: string;
+  action: string;
+  target: string;
+  detail: string;
+}
+
+export async function addAudit(entry: { actor: string; role: string; action: string; target?: string; detail?: string }): Promise<void> {
+  try {
+    await db.execute({
+      sql: `INSERT INTO audit_log (at, actor, role, action, target, detail) VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [
+        new Date().toISOString(),
+        entry.actor.slice(0, 60),
+        entry.role.slice(0, 20),
+        entry.action.slice(0, 40),
+        (entry.target || '').slice(0, 80),
+        (entry.detail || '').slice(0, 200),
+      ],
+    });
+  } catch (err) {
+    console.error('[audit] failed to write:', err);
+  }
+}
+
+export async function listAudit(limit = 200): Promise<AuditEntry[]> {
+  const res = await db.execute({ sql: `SELECT * FROM audit_log ORDER BY id DESC LIMIT ?`, args: [Math.max(1, Math.min(1000, limit))] });
+  return res.rows.map((r) => ({
+    id: Number(r.id),
+    at: String(r.at),
+    actor: String(r.actor),
+    role: String(r.role),
+    action: String(r.action),
+    target: String(r.target),
+    detail: String(r.detail),
+  }));
+}
+
+export async function countAudit(action: string, actor: string, sinceIso: string): Promise<number> {
+  const res = await db.execute({
+    sql: `SELECT COUNT(*) AS c FROM audit_log WHERE action = ? AND LOWER(actor) = LOWER(?) AND at >= ?`,
+    args: [action, actor, sinceIso],
+  });
+  return Number(res.rows[0]?.c ?? 0);
+}
+
+// ==========================================
+// ব্যাকআপ ও পুনরুদ্ধার (শুধু মূল প্রশাসক; ব্যাকআপে নাম-ফোনসহ সব থাকে, তাই ফাইলটি গোপন রাখুন)
+// ==========================================
+
+export async function exportBackup() {
+  const problems = await getAllProblems();
+  const manifesto = await getAllManifestoItems();
+  const profile = await db.execute(`SELECT * FROM leader_profile`);
+  const settings = await db.execute(`SELECT key, value, updated_at FROM site_settings WHERE key NOT LIKE 'totp%'`);
+  const audit = await db.execute(`SELECT * FROM audit_log ORDER BY id ASC`);
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    note: 'এই ফাইলে নাগরিকের নাম ও ফোন আছে। নিরাপদ জায়গায় রাখুন, কাউকে পাঠাবেন না।',
+    problems,
+    manifesto,
+    leader_profile: profile.rows,
+    site_settings: settings.rows,
+    audit_log: audit.rows,
+  };
+}
+
+/**
+ * ব্যাকআপ থেকে ফেরানো (মার্জ: আছে এমন সারি বদলায়, নেই এমন সারি যোগ হয়; কিছু মোছে না)।
+ * নিরীক্ষা-খাতায় শুধু নতুন সারি যোগ হয়।
+ */
+export async function restoreBackup(data: any): Promise<{ problems: number; manifesto: number; settings: number }> {
+  if (!data || data.version !== 1 || !Array.isArray(data.problems)) throw new Error('ব্যাকআপ ফাইলটি সঠিক নয়।');
+  let problems = 0;
+  for (const p of data.problems as ProblemReport[]) {
+    await db.execute({
+      sql: `
+        INSERT OR REPLACE INTO problems (
+          id, tracking_code, submission_type, title, description, category, ward, specific_location, citizen_name, phone, is_anonymous, urgency, status, created_at, upvotes, timeline, assigned_officer, resolution_note, phone_hash, consent_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      args: [
+        p.id,
+        p.trackingCode,
+        p.submissionType,
+        seal(p.title || ''),
+        seal(p.description || ''),
+        p.category,
+        p.ward,
+        seal(p.specificLocation || ''),
+        seal(p.citizenName || ''),
+        seal(p.phone || ''),
+        p.isAnonymous ? 1 : 0,
+        p.urgency,
+        LEGACY_STATUS_MAP[p.status as string] || p.status,
+        p.createdAt,
+        p.upvotes || 0,
+        JSON.stringify(p.timeline || []),
+        p.assignedOfficer || '',
+        seal(p.resolutionNote || ''),
+        phoneBlindIndex(normalizeBdMobile(p.phone) || ''),
+        '',
+      ],
+    });
+    problems++;
+  }
+  let manifesto = 0;
+  for (const m of (data.manifesto || []) as ManifestoItem[]) {
+    const exists = await db.execute({ sql: `SELECT 1 FROM manifesto_items WHERE id = ?`, args: [m.id] });
+    if (exists.rows.length) await updateManifestoItem(m);
+    else await insertManifestoItem(m);
+    manifesto++;
+  }
+  let settings = 0;
+  for (const s of (data.site_settings || []) as any[]) {
+    if (typeof s.key === 'string' && !s.key.startsWith('totp')) {
+      await setSetting(s.key, String(s.value));
+      settings++;
+    }
+  }
+  for (const e of (data.audit_log || []) as any[]) {
+    await db.execute({
+      sql: `INSERT OR IGNORE INTO audit_log (id, at, actor, role, action, target, detail) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      args: [Number(e.id), String(e.at), String(e.actor), String(e.role), String(e.action), String(e.target ?? ''), String(e.detail ?? '')],
+    });
+  }
+  invalidateStatsCache();
+  return { problems, manifesto, settings };
 }
 
 // ==========================================
@@ -607,6 +1013,7 @@ export async function getDatabaseStatus() {
       persistent: isDbPersistent,
       databaseUrl: safeUrl,
       problemsCount: Number(pCountRes.rows[0]?.count ?? 0),
+      encryption: isEncryptionEnabled(),
       manifestoCount: Number(mCountRes.rows[0]?.count ?? 0),
     };
   } catch (error: any) {

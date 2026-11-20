@@ -7,6 +7,7 @@ interface FooterProps {
   onOpenReportModal: () => void;
   onOpenTrackModal: () => void;
   onOpenAdmin: () => void;
+  onOpenPrivacy: () => void;
   leaderProfile: LeaderProfile;
 }
 
@@ -15,6 +16,7 @@ export const Footer: React.FC<FooterProps> = ({
   onOpenReportModal,
   onOpenTrackModal,
   onOpenAdmin,
+  onOpenPrivacy,
   leaderProfile,
 }) => {
   return (
@@ -73,9 +75,9 @@ export const Footer: React.FC<FooterProps> = ({
                 </a>
               </li>
               <li>
-                <a href="#problem-feed" className="hover:text-emerald-400 transition-colors">
-                  {language === 'bn' ? 'সকল অভিযোগ ও উপদেশের তালিকা' : 'Citizen Grievance & Advice Feed'}
-                </a>
+                <button type="button" onClick={onOpenPrivacy} className="hover:text-emerald-400 transition-colors cursor-pointer text-left">
+                  {language === 'bn' ? 'গোপনীয়তা নীতি' : 'Privacy Policy'}
+                </button>
               </li>
             </ul>
           </div>

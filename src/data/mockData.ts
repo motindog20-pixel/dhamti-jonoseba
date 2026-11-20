@@ -103,6 +103,14 @@ export const INITIAL_AREAS: AreaStat[] = [
 
 export const CATEGORIES: CategoryStat[] = [
   {
+    id: 'drugs',
+    nameBn: 'মাদক',
+    nameEn: 'Drugs',
+    iconName: 'Pill',
+    count: 0,
+    color: '#7c3aed'
+  },
+  {
     id: 'road',
     nameBn: 'সড়ক ও অবকাঠামো',
     nameEn: 'Roads & Infrastructure',
@@ -149,6 +157,14 @@ export const CATEGORIES: CategoryStat[] = [
     iconName: 'ShieldAlert',
     count: 0,
     color: '#dc2626'
+  },
+  {
+    id: 'other',
+    nameBn: 'অন্যান্য',
+    nameEn: 'Other',
+    iconName: 'MoreHorizontal',
+    count: 0,
+    color: '#64748b'
   }
 ];
 
@@ -203,11 +219,11 @@ export const UI_STRINGS = {
     submitNow: 'অভিযোগ দাখিল করুন',
     cancel: 'বাতিল',
     trackingSuccessTitle: 'আপনার অভিযোগ সফলভাবে গৃহীত হয়েছে!',
-    trackingSuccessDesc: 'আপনার ট্র্যাকিং কোডটি সংরক্ষণ করুন:',
+    trackingSuccessDesc: 'আপনার রেফারেন্স কোড (অবস্থা দেখতে শুধু মোবাইল নম্বর লাগবে):',
     copyCode: 'কোড কপি করুন',
     copied: 'কপি হয়েছে!',
     trackModalTitle: 'আপনার অভিযোগের বর্তমান অবস্থা জানুন',
-    trackInputPlaceholder: 'মোবাইল নম্বর বা ট্র্যাকিং কোড লিখুন',
+    trackInputPlaceholder: 'মোবাইল নম্বর লিখুন',
     searchBtn: 'অনুসন্ধান করুন',
     searchNotFound: 'এই ট্র্যাকিং কোডে কোনো অভিযোগ পাওয়া যায়নি।',
     assignedTo: 'দায়িত্বপ্রাপ্ত কর্মকর্তা / দল',
@@ -262,11 +278,11 @@ export const UI_STRINGS = {
     submitNow: 'Submit Grievance',
     cancel: 'Cancel',
     trackingSuccessTitle: 'Your Problem Has Been Successfully Registered!',
-    trackingSuccessDesc: 'Please save your unique tracking code:',
+    trackingSuccessDesc: 'Your reference code (to check status you only need your mobile number):',
     copyCode: 'Copy Code',
     copied: 'Copied!',
     trackModalTitle: 'Check Your Report Status',
-    trackInputPlaceholder: 'Mobile number or tracking code',
+    trackInputPlaceholder: 'Mobile number',
     searchBtn: 'Search',
     searchNotFound: 'No report found for this tracking code.',
     assignedTo: 'Assigned Action Team / Officer',

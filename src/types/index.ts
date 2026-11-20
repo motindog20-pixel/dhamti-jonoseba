@@ -2,7 +2,29 @@ export type Language = 'bn' | 'en';
 
 export type SubmissionType = 'complaint' | 'advice';
 
-export type ProblemStatus = 'pending' | 'reviewing' | 'in_progress' | 'resolved';
+export type ProblemStatus =
+  | 'submitted' // জমা হয়েছে
+  | 'under_review' // পর্যালোচনাধীন
+  | 'need_info' // অতিরিক্ত তথ্য প্রয়োজন
+  | 'guidance_given' // প্রয়োজনীয় তথ্য বা দিকনির্দেশনা দেওয়া হয়েছে
+  | 'contacted' // যোগাযোগ করা হয়েছে
+  | 'review_done'; // পর্যালোচনা সম্পন্ন
+
+export type StaffRole = 'owner';
+
+/** পাবলিক পরিসংখ্যান: null মানে "৫-এর কম" (গোপনীয়তার জন্য সংখ্যা লুকানো) */
+export interface PublicStats {
+  generatedAt: string;
+  total: number;
+  reviewDone: number | null;
+  underReview: number | null;
+  submitted: number | null;
+  /** প্রতিটি ওয়ার্ডে ধরন অনুযায়ী সংখ্যা (বেশি থেকে কম); ৫-এর কম ঘর `otherCount`-এ মেশানো */
+  wards: { ward: string; total: number | null; categories: { id: string; count: number }[]; otherCount: number | null }[];
+  categories: { id: string; count: number }[];
+  otherSmallCategories: number | null;
+  monthly: { month: string; count: number }[];
+}
 
 export type UrgencyLevel = 'normal' | 'high' | 'critical';
 

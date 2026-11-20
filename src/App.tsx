@@ -1,15 +1,14 @@
 import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
-import { Language, ProblemReport, AreaStat, CategoryStat, ProblemStatus, LeaderProfile, ManifestoItem } from './types';
-import { INITIAL_AREAS, CATEGORIES, INITIAL_PROBLEMS, DEFAULT_PROFILE, LEADER_PERMANENT_PHOTO_URL } from './data/mockData';
+import { Language, ProblemReport, AreaStat, CategoryStat, LeaderProfile, ManifestoItem, PublicStats } from './types';
+import { INITIAL_AREAS, CATEGORIES, DEFAULT_PROFILE } from './data/mockData';
 import { INITIAL_MANIFESTO_ITEMS } from './data/manifestoData';
 import { Header } from './components/Header';
 import { HeroSection } from './components/HeroSection';
 import { ManifestoSection } from './components/ManifestoSection';
 import { StatisticsSection } from './components/StatisticsSection';
-import { ProblemFeedSection } from './components/ProblemFeedSection';
 import { SubmitProblemModal } from './components/SubmitProblemModal';
 import { TrackProblemModal } from './components/TrackProblemModal';
-import { ProblemDetailModal } from './components/ProblemDetailModal';
+import { PrivacyPolicyModal } from './components/PrivacyPolicyModal';
 import { MobileActionBar } from './components/MobileActionBar';
 
 // অ্যাডমিন প্যানেল ভারী (১২০ KB+); সাধারণ ভিজিটরের ফোনে লোড না করে শুধু খুললে আনা হয়
@@ -19,7 +18,8 @@ const AdminSectionModal = lazy(() =>
 import { Footer } from './components/Footer';
 import { api, ApiError } from './services/api';
 
-const STORAGE_KEY_PROBLEMS = 'dhamti_real_problems_v1';
+// আগের সংস্করণ এই চাবিতে অভিযোগের তালিকা ব্রাউজারে রাখত; গোপনীয়তার জন্য এখন মুছে দেওয়া হয়
+const LEGACY_KEY_PROBLEMS = 'dhamti_real_problems_v1';
 const STORAGE_KEY_PROFILE = 'dhamti_leader_profile_v1';
 const STORAGE_KEY_VILLAGES = 'dhamti_ward_villages_v1';
 const STORAGE_KEY_MANIFESTO = 'dhamti_electoral_manifesto_v2';
@@ -27,20 +27,14 @@ const STORAGE_KEY_MANIFESTO = 'dhamti_electoral_manifesto_v2';
 export default function App() {
   const [language, setLanguage] = useState<Language>('bn');
 
-  // Load real problems & advice from local storage (Initial render fallback)
-  const [problems, setProblems] = useState<ProblemReport[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_PROBLEMS);
-      if (saved) {
-        // আগের সংস্করণের ক্যাশে নাম/ফোন থাকতে পারে; সেগুলো মুছে নিই
-        const cached: ProblemReport[] = JSON.parse(saved);
-        return cached.map((p) => ({ ...p, phone: '', citizenName: 'এলাকাবাসী' }));
-      }
-    } catch {
-      // ignore
-    }
-    return INITIAL_PROBLEMS;
-  });
+  // সবার জন্য শুধু সমষ্টিগত পরিসংখ্যান (কোনো ব্যক্তিগত অভিযোগ ব্রাউজারে আসে না)
+  const [stats, setStats] = useState<PublicStats | null>(null);
+  const loadStats = () => {
+    api
+      .getStats()
+      .then(setStats)
+      .catch(() => undefined);
+  };
 
   // Persistent Leader Profile with Hardcoded Permanent Portrait
   const [leaderProfile, setLeaderProfile] = useState<LeaderProfile>(() => {
@@ -80,7 +74,6 @@ export default function App() {
     return INITIAL_MANIFESTO_ITEMS;
   });
 
-  const [selectedWard, setSelectedWard] = useState<string>('');
 
   // ছোট বার্তা-বার (সার্ভারে কাজ ব্যর্থ হলে অ্যাডমিন/নাগরিক জানতে পারবেন)
   const [notice, setNotice] = useState<string>('');
@@ -96,24 +89,28 @@ export default function App() {
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isTrackModalOpen, setIsTrackModalOpen] = useState(false);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
-  const [activeDetailProblem, setActiveDetailProblem] = useState<ProblemReport | null>(null);
+  const [isPrivacyOpen, setIsPrivacyOpen] = useState(false);
 
   // Initial Fetch from Turso DB
   useEffect(() => {
     let isMounted = true;
     async function fetchFromTurso() {
       try {
-        const [dbProblems, dbManifesto, dbProfile, dbSettings] = await Promise.all([
-          api.getProblems().catch(() => null),
+        try {
+          localStorage.removeItem(LEGACY_KEY_PROBLEMS);
+          localStorage.removeItem('dhamti_my_reports_v1');
+        } catch {
+          // ignore
+        }
+        const [dbStats, dbManifesto, dbProfile, dbSettings] = await Promise.all([
+          api.getStats().catch(() => null),
           api.getManifesto().catch(() => null),
           api.getProfile().catch(() => null),
           api.getSettings().catch(() => null),
         ]);
         if (!isMounted) return;
 
-        if (dbProblems && Array.isArray(dbProblems)) {
-          setProblems(dbProblems);
-        }
+        if (dbStats) setStats(dbStats);
         // ফাঁকা তালিকাও সত্য (ইশতেহার এখনো প্রকাশিত হয়নি), তাই পুরনো ক্যাশ ঝেড়ে ফেলি
         if (dbManifesto && Array.isArray(dbManifesto)) {
           setManifestoItems(dbManifesto);
@@ -139,15 +136,6 @@ export default function App() {
       isMounted = false;
     };
   }, []);
-
-  // Sync real problems to localStorage as local cache
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_PROBLEMS, JSON.stringify(problems));
-    } catch {
-      // storage unavailable
-    }
-  }, [problems]);
 
   // Sync leader profile to localStorage as local cache
   useEffect(() => {
@@ -175,126 +163,31 @@ export default function App() {
     }
   }, [manifestoItems]);
 
-  // Real statistics strictly from actual complaints & advice
-  const totalSubmissions = problems.length;
-  const totalResolved = problems.filter((p) => p.status === 'resolved').length;
-  const totalInProgress = problems.filter((p) => p.status === 'in_progress').length;
-
-  // Real dynamic ward problem counts
+  // Ward list with villages (counts come from the public stats, never from private records)
   const computedAreas: AreaStat[] = useMemo(() => {
     return INITIAL_AREAS.map((area) => {
-      const wardProblems = problems.filter((p) => p.ward === area.wardNumber);
-      const resolved = wardProblems.filter((p) => p.status === 'resolved');
       const villages = (wardVillages[area.wardNumber] || '').trim();
       return {
         ...area,
-        // গ্রামের নাম থাকলে ওয়ার্ডের পাশে বসে: "ওয়ার্ড নং ০১ (গ্রাম১, গ্রাম২)"
         wardNameBn: villages ? `${area.wardNameBn} (${villages})` : area.wardNameBn,
         wardNameEn: villages ? `${area.wardNameEn} (${villages})` : area.wardNameEn,
-        totalProblems: wardProblems.length,
-        resolvedProblems: resolved.length,
+        totalProblems: stats?.wards.find((w) => w.ward === area.wardNumber)?.total ?? 0,
+        resolvedProblems: 0,
       };
     });
-  }, [problems, wardVillages]);
+  }, [stats, wardVillages]);
 
-  // Real dynamic category counts
-  const computedCategories: CategoryStat[] = useMemo(() => {
-    return CATEGORIES.map((cat) => ({
-      ...cat,
-      count: problems.filter((p) => p.category === cat.id).length,
-    }));
-  }, [problems]);
+  const computedCategories: CategoryStat[] = useMemo(
+    () => CATEGORIES.map((cat) => ({ ...cat, count: stats?.categories.find((c) => c.id === cat.id)?.count ?? 0 })),
+    [stats]
+  );
 
   // নতুন অভিযোগ/পরামর্শ: আগে সার্ভারে সংরক্ষণ, সফল হলে তবেই পর্দায় ও কোড দেখানো।
   // ব্যর্থ হলে ত্রুটি ছুঁড়ে দেওয়া হয়, ফর্ম সেটা দেখাবে।
-  const handleAddNewProblem = async (newProblem: ProblemReport): Promise<ProblemReport> => {
+  const handleAddNewProblem = async (newProblem: ProblemReport & { consent: boolean }): Promise<ProblemReport> => {
     const created = await api.createProblem(newProblem);
-    setProblems((prev) => [created, ...prev]);
+    loadStats();
     return created;
-  };
-
-  // Upvote problem / advice in Turso DB
-  const handleUpvote = async (problemId: string) => {
-    const target = problems.find((p) => p.id === problemId);
-    const isUpvoted = target?.userUpvoted;
-    const delta = isUpvoted ? -1 : 1;
-
-    setProblems((prev) =>
-      prev.map((item) => {
-        if (item.id === problemId) {
-          return {
-            ...item,
-            upvotes: isUpvoted ? Math.max(0, item.upvotes - 1) : item.upvotes + 1,
-            userUpvoted: !isUpvoted,
-          };
-        }
-        return item;
-      })
-    );
-
-    if (activeDetailProblem && activeDetailProblem.id === problemId) {
-      setActiveDetailProblem((prev) => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          upvotes: isUpvoted ? Math.max(0, prev.upvotes - 1) : prev.upvotes + 1,
-          userUpvoted: !isUpvoted,
-        };
-      });
-    }
-
-    try {
-      await api.upvoteProblem(problemId, delta);
-    } catch (err) {
-      console.error('Failed to sync upvote to Turso DB:', err);
-      // সার্ভারে না গেলে পর্দার সংখ্যা আগের অবস্থায় ফিরিয়ে দিই
-      setProblems((prev) =>
-        prev.map((item) =>
-          item.id === problemId
-            ? {
-                ...item,
-                upvotes: isUpvoted ? item.upvotes + 1 : Math.max(0, item.upvotes - 1),
-                userUpvoted: Boolean(isUpvoted),
-              }
-            : item
-        )
-      );
-      setNotice(failMessage(err, 'সমর্থন নথিভুক্ত করা যায়নি।'));
-    }
-  };
-
-  // Delete problem / advice from Admin in Turso DB
-  const handleDeleteProblem = async (problemId: string) => {
-    try {
-      await api.deleteProblem(problemId);
-      setProblems((prev) => prev.filter((p) => p.id !== problemId));
-      if (activeDetailProblem?.id === problemId) {
-        setActiveDetailProblem(null);
-      }
-    } catch (err) {
-      console.error('Failed to delete problem in Turso DB:', err);
-      setNotice(failMessage(err, 'মোছা যায়নি। আবার লগইন করে চেষ্টা করুন।'));
-    }
-  };
-
-  // Update status from Admin in Turso DB
-  const handleUpdateStatus = async (
-    problemId: string,
-    newStatus: ProblemStatus,
-    noteText: string,
-    officerName: string
-  ) => {
-    try {
-      const updated = await api.updateProblemStatus(problemId, newStatus, noteText, officerName);
-      setProblems((prev) =>
-        prev.map((item) =>
-          item.id === problemId ? { ...updated, userUpvoted: item.userUpvoted } : item
-        )
-      );
-    } catch (err) {
-      console.error('Failed to update status in Turso DB:', err);
-      setNotice(failMessage(err, 'অবস্থা বদলানো যায়নি। আবার লগইন করে চেষ্টা করুন।'));
-    }
   };
 
   // Manifesto Admin handlers with Turso DB sync
@@ -382,8 +275,8 @@ export default function App() {
           language={language}
           onOpenReportModal={() => setIsReportModalOpen(true)}
           onOpenTrackModal={() => setIsTrackModalOpen(true)}
-          totalProblemsCount={totalSubmissions}
-          resolvedProblemsCount={totalResolved}
+          totalProblemsCount={stats?.total ?? 0}
+          resolvedProblemsCount={stats ? stats.reviewDone : null}
           leaderProfile={leaderProfile}
         />
 
@@ -395,29 +288,8 @@ export default function App() {
           onOpenReportModal={() => setIsReportModalOpen(true)}
         />
 
-        {/* Real Statistics Section */}
-        <StatisticsSection
-          language={language}
-          areas={computedAreas}
-          categories={computedCategories}
-          selectedWard={selectedWard}
-          onSelectWard={setSelectedWard}
-          totalSubmissions={totalSubmissions}
-          totalResolved={totalResolved}
-          totalInProgress={totalInProgress}
-        />
-
-        {/* Grievances & Advice Feed with Status Monitor */}
-        <ProblemFeedSection
-          language={language}
-          problems={problems}
-          areas={computedAreas}
-          categories={computedCategories}
-          selectedWard={selectedWard}
-          onSelectWard={setSelectedWard}
-          onUpvote={handleUpvote}
-          onViewDetails={(problem) => setActiveDetailProblem(problem)}
-        />
+        {/* সমষ্টিগত পরিসংখ্যান (৫-এর কম লুকানো) */}
+        <StatisticsSection language={language} stats={stats} wardVillages={wardVillages} />
       </main>
 
       {/* Modals & Overlays */}
@@ -428,21 +300,15 @@ export default function App() {
         areas={computedAreas}
         categories={computedCategories}
         onSubmit={handleAddNewProblem}
+        onOpenPrivacy={() => setIsPrivacyOpen(true)}
       />
+
+      <PrivacyPolicyModal isOpen={isPrivacyOpen} onClose={() => setIsPrivacyOpen(false)} language={language} />
 
       <TrackProblemModal
         isOpen={isTrackModalOpen}
         onClose={() => setIsTrackModalOpen(false)}
         language={language}
-        problems={problems}
-      />
-
-      <ProblemDetailModal
-        problem={activeDetailProblem}
-        isOpen={Boolean(activeDetailProblem)}
-        onClose={() => setActiveDetailProblem(null)}
-        language={language}
-        onUpvote={handleUpvote}
       />
 
       {/* Complete Dedicated Admin Section Modal */}
@@ -452,7 +318,6 @@ export default function App() {
             isOpen={isAdminModalOpen}
             onClose={() => setIsAdminModalOpen(false)}
             language={language}
-            problems={problems}
             areas={computedAreas}
             categories={computedCategories}
             leaderProfile={leaderProfile}
@@ -461,8 +326,7 @@ export default function App() {
             onSetLeaderPhoto={handleSetLeaderPhoto}
             wardVillages={wardVillages}
             onSaveWardVillages={handleSaveWardVillages}
-            onUpdateProblemStatus={handleUpdateStatus}
-            onDeleteProblem={handleDeleteProblem}
+            onStatsChanged={loadStats}
             onUpdateManifestoItem={handleUpdateManifestoItem}
             onAddManifestoItem={handleAddManifestoItem}
             onDeleteManifestoItem={handleDeleteManifestoItem}
@@ -497,6 +361,7 @@ export default function App() {
         onOpenReportModal={() => setIsReportModalOpen(true)}
         onOpenTrackModal={() => setIsTrackModalOpen(true)}
         onOpenAdmin={() => setIsAdminModalOpen(true)}
+        onOpenPrivacy={() => setIsPrivacyOpen(true)}
         leaderProfile={leaderProfile}
       />
     </div>

@@ -45,14 +45,15 @@ import {
   Database
 } from 'lucide-react';
 import { sanitizeString, sanitizeForCsv } from '../services/security';
-import { api, ApiError, DbStatusInfo } from '../services/api';
+import { api, ApiError, NeedsTwoFactorError, DbStatusInfo, AdminSessionInfo } from '../services/api';
+import { STATUS_ORDER, STATUS_LABEL_BN, STATUS_LABEL_EN, NOTE_REQUIRED_STATUSES } from '../data/statuses';
 import { prepareProfilePhoto, PhotoPrepError } from '../services/photo';
+import { AdminSecurityPanel } from './AdminSecurityPanel';
 
 interface AdminSectionModalProps {
   isOpen: boolean;
   onClose: () => void;
   language: Language;
-  problems: ProblemReport[];
   areas: AreaStat[];
   categories: CategoryStat[];
   leaderProfile: LeaderProfile;
@@ -61,8 +62,7 @@ interface AdminSectionModalProps {
   onSetLeaderPhoto: (dataUrl: string | null) => Promise<void>;
   wardVillages: Record<string, string>;
   onSaveWardVillages: (villages: Record<string, string>) => Promise<void>;
-  onUpdateProblemStatus: (problemId: string, newStatus: ProblemStatus, noteText: string, officerName: string) => void;
-  onDeleteProblem: (problemId: string) => void;
+  onStatsChanged?: () => void;
   onUpdateManifestoItem: (updatedItem: ManifestoItem) => void;
   onAddManifestoItem: (newItem: ManifestoItem) => void;
   onDeleteManifestoItem: (itemId: string) => void;
@@ -74,7 +74,6 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
   isOpen,
   onClose,
   language,
-  problems: publicProblems,
   areas,
   categories,
   leaderProfile,
@@ -83,8 +82,7 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
   onSetLeaderPhoto,
   wardVillages,
   onSaveWardVillages,
-  onUpdateProblemStatus,
-  onDeleteProblem,
+  onStatsChanged,
   onUpdateManifestoItem,
   onAddManifestoItem,
   onDeleteManifestoItem,
@@ -98,6 +96,9 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState<string>('');
   const [isVerifying, setIsVerifying] = useState(false);
+  const [needs2fa, setNeeds2fa] = useState(false);
+  const [codeInput, setCodeInput] = useState('');
+  const [sessionInfo, setSessionInfo] = useState<AdminSessionInfo | null>(null);
 
   // প্যানেল খুললে সার্ভারকে জিজ্ঞেস করি লগইন আছে কিনা
   useEffect(() => {
@@ -108,6 +109,7 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
       if (!alive) return;
       setIsAuthenticated(res.authenticated);
       setAuthConfigured(res.configured);
+      setSessionInfo(res);
       setAuthChecking(false);
     });
     return () => {
@@ -116,18 +118,19 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
   }, [isOpen]);
 
   // Active Tab: 'complaints' | 'manifesto' | 'profile_settings'
-  const [activeTab, setActiveTab] = useState<'complaints' | 'manifesto' | 'profile_settings'>('complaints');
+  const [activeTab, setActiveTab] = useState<'complaints' | 'manifesto' | 'profile_settings' | 'security'>('complaints');
   const [mobileComplaintView, setMobileComplaintView] = useState<'list' | 'details'>('list');
   const [mobileManifestoView, setMobileManifestoView] = useState<'list' | 'editor'>('list');
 
   // Complaints / Advice Management State
   const [submissionTypeFilter, setSubmissionTypeFilter] = useState<'all' | 'complaint' | 'advice'>('all');
   const [selectedProblemId, setSelectedProblemId] = useState<string>('');
-  const [targetStatus, setTargetStatus] = useState<ProblemStatus>('in_progress');
-  const [officerName, setOfficerName] = useState('ধামতী ইউনিয়ন সেবাদল');
+  const [targetStatus, setTargetStatus] = useState<ProblemStatus>('under_review');
   const [actionNote, setActionNote] = useState('');
-  const [complaintFilter, setComplaintFilter] = useState<'all' | 'pending' | 'reviewing' | 'in_progress' | 'resolved'>('all');
+  const [complaintFilter, setComplaintFilter] = useState<'all' | ProblemStatus>('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [statusMsg, setStatusMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [isApplying, setIsApplying] = useState(false);
 
   // Manifesto Manager State
   const [selectedManifestoId, setSelectedManifestoId] = useState<string>('');
@@ -181,28 +184,28 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
     }
   }, [isOpen, isAuthenticated]);
 
-  // অ্যাডমিন লগইন থাকলে সার্ভার থেকে নাম-ফোনসহ পূর্ণ তালিকা আনি (সাধারণ তালিকায় এগুলো থাকে না)।
-  // সাধারণ তালিকা বদলালে (স্ট্যাটাস/মোছা/নতুন জমা) এটিও নতুন করে আনা হয়।
-  const [adminProblems, setAdminProblems] = useState<ProblemReport[] | null>(null);
-  useEffect(() => {
-    if (!isOpen || !isAuthenticated) {
-      setAdminProblems(null);
-      return;
-    }
-    let alive = true;
+  // অ্যাডমিন লগইন থাকলে সার্ভার থেকে নাম-ফোনসহ পূর্ণ তালিকা আনি (সাধারণ মানুষ এটা কখনো পায় না)
+  const [problems, setProblems] = useState<ProblemReport[]>([]);
+  const [problemsError, setProblemsError] = useState('');
+  const reloadProblems = () =>
     api
       .adminGetProblems()
       .then((list) => {
-        if (alive) setAdminProblems(list);
+        setProblems(list);
+        setProblemsError('');
       })
-      .catch(() => {
-        // সেশন শেষ হলে সাধারণ তালিকাতেই থাকি
+      .catch((err) => {
+        // সেশন শেষ হলে আবার লগইনের পর্দায় ফিরি
+        if (err instanceof ApiError && err.status === 401) setIsAuthenticated(false);
+        else setProblemsError(err instanceof ApiError ? err.message : 'তালিকা আনা যায়নি।');
       });
-    return () => {
-      alive = false;
-    };
-  }, [isOpen, isAuthenticated, publicProblems]);
-  const problems = adminProblems ?? publicProblems;
+  useEffect(() => {
+    if (!isOpen || !isAuthenticated) {
+      setProblems([]);
+      return;
+    }
+    reloadProblems();
+  }, [isOpen, isAuthenticated]);
 
   useEffect(() => {
     if (problems.length > 0 && !selectedProblemId) {
@@ -242,10 +245,14 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
     setIsVerifying(true);
     setPinError('');
     try {
-      await api.adminLogin(pinInput);
+      await api.adminLogin(pinInput, needs2fa ? codeInput : undefined);
       setIsAuthenticated(true);
       setPinInput('');
+      setCodeInput('');
+      setNeeds2fa(false);
+      api.adminSession().then(setSessionInfo);
     } catch (err) {
+      if (err instanceof NeedsTwoFactorError) setNeeds2fa(true);
       setPinError(
         err instanceof ApiError
           ? err.message
@@ -262,6 +269,9 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
     await api.adminLogout();
     setIsAuthenticated(false);
     setPinInput('');
+    setCodeInput('');
+    setNeeds2fa(false);
+    setProblems([]);
   };
 
   const errText = (err: unknown) =>
@@ -383,37 +393,37 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
 
   const currentProblem = filteredProblems.find((p) => p.id === selectedProblemId) || filteredProblems[0] || problems[0];
 
-  const handleApplyStatusChange = (e: React.FormEvent) => {
+  const noteRequired = NOTE_REQUIRED_STATUSES.includes(targetStatus);
+
+  const handleApplyStatusChange = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentProblem) return;
-
-    const isAdvice = currentProblem.submissionType === 'advice';
-    const defaultNotes: Record<ProblemStatus, string> = {
-      reviewing: isAdvice
-        ? 'নাগরিকের পরামর্শটি গুরুত্বসহকারে পর্যালোচনা করা হচ্ছে।'
-        : 'ইউনিয়ন প্রতিনিধি কর্তৃক অভিযোগটি সরেজমিনে যাচাই করা হচ্ছে।',
-      in_progress: isAdvice
-        ? 'পরামর্শটি নীতিগতভাবে গ্রহণ করে বাস্তবায়নের কার্যক্রম চলছে।'
-        : 'মাঠপর্যায়ে সংস্কার ও সমাধানের কার্যক্রম চলমান রয়েছে।',
-      resolved: isAdvice
-        ? 'পরামর্শটি সফলভাবে গ্রহণ ও কার্যকর করা হয়েছে।'
-        : 'অভিযোগের স্থান পরিদর্শন করে সমস্যাটির সমাধান সম্পন্ন হয়েছে।',
-      pending: 'নতুন আবেদন হিসেবে নথিভুক্ত হয়েছে।',
-    };
-
-    const finalNote = actionNote.trim() || defaultNotes[targetStatus];
-
-    onUpdateProblemStatus(
-      currentProblem.id,
-      targetStatus,
-      finalNote,
-      officerName.trim() || 'ধামতী ইউনিয়ন সেবাদল'
-    );
-    setActionNote('');
+    if (!currentProblem || isApplying) return;
+    setStatusMsg(null);
+    if (noteRequired && actionNote.trim().length < 5) {
+      setStatusMsg({ ok: false, text: language === 'bn' ? 'এই অবস্থার জন্য কী করা হয়েছে তা সংক্ষেপে লিখুন (কমপক্ষে ৫ অক্ষর)।' : 'Please write briefly what was done (at least 5 characters).' });
+      return;
+    }
+    setIsApplying(true);
+    try {
+      const updated = await api.updateProblemStatus(currentProblem.id, targetStatus, actionNote.trim());
+      setProblems((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      setActionNote('');
+      setStatusMsg({ ok: true, text: language === 'bn' ? 'অবস্থা সংরক্ষণ হয়েছে।' : 'Status saved.' });
+      onStatsChanged?.();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) setIsAuthenticated(false);
+      setStatusMsg({ ok: false, text: errText(err) });
+    } finally {
+      setIsApplying(false);
+    }
   };
+
+  const statusLabel = (st: string) =>
+    (language === 'bn' ? STATUS_LABEL_BN : STATUS_LABEL_EN)[st as ProblemStatus] || st;
 
   // Export CSV
   const handleExportCSV = () => {
+    void api.logExport();
     const headers = ['Type', 'Tracking Code', 'Title', 'Ward', 'Category', 'Urgency', 'Status', 'Location', 'Citizen Name', 'Mobile Number', 'Date'];
     const rows = problems.map((p) => [
       p.submissionType === 'advice' ? 'Advice' : 'Complaint',
@@ -555,11 +565,18 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
     setConfirmDeleteAllCompleted(false);
   };
 
-  const handleDeleteProblemEntry = (id: string) => {
-    const remaining = problems.filter((p) => p.id !== id);
-    setSelectedProblemId(remaining.length > 0 ? remaining[0].id : '');
-    onDeleteProblem(id);
+  const handleDeleteProblemEntry = async (id: string) => {
     setConfirmDeleteProblemId(null);
+    try {
+      await api.deleteProblem(id);
+      const remaining = problems.filter((p) => p.id !== id);
+      setProblems(remaining);
+      setSelectedProblemId(remaining.length > 0 ? remaining[0].id : '');
+      onStatsChanged?.();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) setIsAuthenticated(false);
+      setStatusMsg({ ok: false, text: errText(err) });
+    }
   };
 
   const getWardName = (wardId: string) => {
@@ -631,8 +648,8 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
               {!authChecking && !authConfigured && (
                 <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 text-sm font-semibold">
                   {language === 'bn'
-                    ? 'সার্ভারে অ্যাডমিন পাসওয়ার্ড এখনো সেট করা হয়নি। হোস্টিংয়ে ADMIN_PASSWORD ও SESSION_SECRET দিন।'
-                    : 'Admin password is not configured on the server (ADMIN_PASSWORD / SESSION_SECRET).'}
+                    ? 'সার্ভারে অ্যাডমিন পাসওয়ার্ড এখনো সেট করা হয়নি। হোস্টিংয়ে ADMIN_PASSWORD দিন।'
+                    : 'Admin password is not configured on the server (ADMIN_PASSWORD).'}
                 </div>
               )}
 
@@ -657,9 +674,30 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                   />
                 </div>
 
+                {needs2fa && (
+                  <div>
+                    <label htmlFor="admin-2fa" className="block text-sm font-semibold text-neutral-700 mb-1.5 text-center">
+                      {language === 'bn' ? 'অথেনটিকেটর অ্যাপের ৬ অঙ্কের কোড' : 'Authenticator code (6 digits)'}
+                    </label>
+                    <input
+                      id="admin-2fa"
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={6}
+                      disabled={isVerifying}
+                      value={codeInput}
+                      onChange={(e) => setCodeInput(e.target.value.replace(/\D/g, ''))}
+                      placeholder="••••••"
+                      autoFocus
+                      className="w-full text-center text-2xl tracking-widest py-3 px-4 bg-neutral-50 border-2 border-neutral-300 rounded-2xl focus:outline-none focus:border-emerald-600 focus:bg-white disabled:opacity-50"
+                    />
+                  </div>
+                )}
+
                 <button
                   type="submit"
-                  disabled={isVerifying || authChecking || !pinInput}
+                  disabled={isVerifying || authChecking || !pinInput || (needs2fa && codeInput.length !== 6)}
                   className="w-full py-3 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-xl font-bold text-sm shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
                 >
                   <Unlock className="w-4 h-4" />
@@ -728,6 +766,23 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                   <Settings className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
                   <span>{language === 'bn' ? 'পেজের তথ্য' : 'Page Info'}</span>
                 </button>
+
+                {/* Tab 4: নিরাপত্তা */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('security')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl font-bold transition-all cursor-pointer whitespace-nowrap text-xs ${
+                    activeTab === 'security'
+                      ? 'bg-white text-emerald-800 shadow-xs border border-neutral-200'
+                      : 'text-neutral-600 hover:text-neutral-900'
+                  }`}
+                >
+                  <ShieldCheck className={`w-3.5 h-3.5 shrink-0 ${sessionInfo && sessionInfo.encryption === false ? 'text-red-600' : 'text-emerald-700'}`} />
+                  <span>{language === 'bn' ? 'নিরাপত্তা' : 'Security'}</span>
+                  {sessionInfo && (sessionInfo.encryption === false || sessionInfo.twoFactor === false) && (
+                    <span className="w-2 h-2 rounded-full bg-red-600" aria-label="attention" />
+                  )}
+                </button>
               </div>
 
               {/* Quick Actions (Direct CSV Export) */}
@@ -744,6 +799,14 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                 </button>
               </div>
             </div>
+
+            {activeTab === 'security' && (
+              <AdminSecurityPanel
+                language={language}
+                session={sessionInfo}
+                onSessionChanged={() => api.adminSession().then(setSessionInfo)}
+              />
+            )}
 
             {/* TAB 1: COMPLAINTS & ADVICE MANAGEMENT */}
             {activeTab === 'complaints' && (
@@ -828,10 +891,7 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                     <div className="flex items-center gap-1 overflow-x-auto pb-1">
                       {[
                         { id: 'all', label: language === 'bn' ? 'সকল অবস্থা' : 'All' },
-                        { id: 'pending', label: language === 'bn' ? 'নতুন' : 'Pending' },
-                        { id: 'reviewing', label: language === 'bn' ? 'যাচাই' : 'Review' },
-                        { id: 'in_progress', label: language === 'bn' ? 'চলমান' : 'Ongoing' },
-                        { id: 'resolved', label: language === 'bn' ? 'সম্পন্ন' : 'Done' },
+                        ...STATUS_ORDER.map((st) => ({ id: st, label: statusLabel(st) })),
                       ].map((item) => (
                         <button
                           key={item.id}
@@ -853,7 +913,7 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                   <div className="flex-1 overflow-y-auto divide-y divide-neutral-200/80">
                     {filteredProblems.length === 0 ? (
                       <div className="p-8 text-center text-xs text-neutral-400">
-                        {language === 'bn' ? 'কোনো বার্তা পাওয়া যায়নি' : 'No matching submissions found'}
+                        {problemsError || (language === 'bn' ? 'কোনো বার্তা পাওয়া যায়নি' : 'No matching submissions found')}
                       </div>
                     ) : (
                       filteredProblems.map((p) => {
@@ -883,20 +943,14 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                               </div>
                               <span
                                 className={`font-semibold ${
-                                  p.status === 'resolved'
+                                  p.status === 'review_done'
                                     ? 'text-emerald-700'
-                                    : p.status === 'in_progress'
-                                    ? 'text-amber-700'
-                                    : 'text-neutral-500'
+                                    : p.status === 'submitted'
+                                    ? 'text-neutral-500'
+                                    : 'text-blue-700'
                                 }`}
                               >
-                                {p.status === 'resolved'
-                                  ? (isAdv ? 'বাস্তবায়িত' : 'সমাধান সম্পন্ন')
-                                  : p.status === 'in_progress'
-                                  ? 'চলমান'
-                                  : p.status === 'reviewing'
-                                  ? 'যাচাই চলছে'
-                                  : 'নতুন'}
+                                {statusLabel(p.status)}
                               </span>
                             </div>
 
@@ -1040,23 +1094,20 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                               onChange={(e) => setTargetStatus(e.target.value as ProblemStatus)}
                               className="w-full px-3 py-2 text-xs bg-white border border-neutral-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-600 font-semibold"
                             >
-                              <option value="pending">{language === 'bn' ? 'নতুন আবেদন (Pending)' : 'Pending'}</option>
-                              <option value="reviewing">{language === 'bn' ? 'যাচাই-বাছাই চলছে (Under Review)' : 'Under Review'}</option>
-                              <option value="in_progress">{language === 'bn' ? 'মাঠপর্যায়ে কার্যক্রম চলমান (In Progress)' : 'In Progress'}</option>
-                              <option value="resolved">{language === 'bn' ? 'সম্পূর্ণ সমাধান সম্পন্ন (Resolved / Implemented)' : 'Resolved / Implemented'}</option>
+                              {STATUS_ORDER.map((st) => (
+                                <option key={st} value={st}>
+                                  {statusLabel(st)}
+                                </option>
+                              ))}
                             </select>
                           </div>
 
-                          <div>
-                            <label className="block text-[11px] font-bold text-neutral-700 mb-1">
-                              {language === 'bn' ? 'দায়িত্বপ্রাপ্ত কর্মকর্তা / দল' : 'Assigned Official'}
-                            </label>
-                            <input
-                              type="text"
-                              value={officerName}
-                              onChange={(e) => setOfficerName(e.target.value)}
-                              className="w-full px-3 py-2 text-xs bg-white border border-neutral-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-600"
-                            />
+                          <div className="flex items-end">
+                            <p className="text-[11px] text-neutral-600 leading-snug">
+                              {noteRequired
+                                ? (language === 'bn' ? 'এই অবস্থায় নিচের বিবরণ লেখা বাধ্যতামূলক। নাগরিক এটি দেখবেন।' : 'A note is required for this status. The citizen will see it.')
+                                : (language === 'bn' ? 'বিবরণ ঐচ্ছিক। লিখলে নাগরিক দেখবেন।' : 'Note is optional. The citizen sees it if written.')}
+                            </p>
                           </div>
                         </div>
 
@@ -1073,10 +1124,17 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                           />
                         </div>
 
+                        {statusMsg && (
+                          <div role="status" className={`p-2.5 rounded-lg text-xs font-semibold border ${statusMsg.ok ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-red-50 border-red-200 text-red-800'}`}>
+                            {statusMsg.text}
+                          </div>
+                        )}
+
                         <div className="flex justify-end">
                           <button
                             type="submit"
-                            className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                            disabled={isApplying}
+                            className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
                           >
                             <Send className="w-3.5 h-3.5" />
                             <span>{language === 'bn' ? 'হালনাগাদ নিশ্চিত করুন' : 'Apply Update'}</span>

@@ -21,7 +21,7 @@ async function startServer() {
 
   if (!isAuthConfigured()) {
     console.warn(
-      '[Dhamti Server] ADMIN_PASSWORD / SESSION_SECRET সেট করা নেই, তাই অ্যাডমিন লগইন বন্ধ আছে। .env.example দেখুন।'
+      '[Dhamti Server] ADMIN_PASSWORD সেট করা নেই, তাই অ্যাডমিন লগইন বন্ধ আছে। .env.example দেখুন।'
     );
   }
 

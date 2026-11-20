@@ -4,7 +4,7 @@ import { UI_STRINGS } from '../data/mockData';
 import { X, Check, Copy, MessageSquareText, ShieldCheck, CheckCircle2, Lightbulb, AlertTriangle, Lock, Smartphone } from 'lucide-react';
 import { sanitizeString } from '../services/security';
 import { normalizeBdMobile, formatBdMobile } from '../services/phone';
-import { readContact, rememberCode, rememberContact } from '../services/myReports';
+import { readContact, rememberContact } from '../services/myReports';
 
 interface SubmitProblemModalProps {
   isOpen: boolean;
@@ -12,7 +12,8 @@ interface SubmitProblemModalProps {
   language: Language;
   areas: AreaStat[];
   categories: CategoryStat[];
-  onSubmit: (problem: ProblemReport) => Promise<ProblemReport>;
+  onSubmit: (problem: ProblemReport & { consent: boolean }) => Promise<ProblemReport>;
+  onOpenPrivacy: () => void;
 }
 
 export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
@@ -22,6 +23,7 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
   areas,
   categories,
   onSubmit,
+  onOpenPrivacy,
 }) => {
   const strings = UI_STRINGS[language];
 
@@ -32,13 +34,14 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
   const [citizenName, setCitizenName] = useState(() => readContact().name);
   const [phone, setPhone] = useState(() => readContact().phone);
   const [ward, setWard] = useState('');
-  const [category, setCategory] = useState(categories[0]?.id || 'road');
+  const [category, setCategory] = useState('');
   const [specificLocation, setSpecificLocation] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [urgency, setUrgency] = useState<UrgencyLevel>('normal');
   const isAnonymous = false; // বেনামী অপশন নেই: নাম, নম্বর ও ওয়ার্ড বাধ্যতামূলক
 
+  const [consent, setConsent] = useState(false);
   const [submittedCode, setSubmittedCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -52,6 +55,16 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
     e.preventDefault();
     if (isSubmitting) return;
     setErrorMsg('');
+
+    if (!category) {
+      setErrorMsg(language === 'bn' ? 'আগে সমস্যার বিষয় বেছে নিন।' : 'Please choose the topic first.');
+      return;
+    }
+
+    if (!consent) {
+      setErrorMsg(language === 'bn' ? 'গোপনীয়তা নীতি পড়ে সম্মতির ঘরে টিক দিন।' : 'Please read the privacy policy and tick the consent box.');
+      return;
+    }
 
     const cleanTitle = sanitizeString(title, 120);
     const cleanDesc = sanitizeString(description, 1000);
@@ -135,15 +148,14 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
       phone: cleanPhone,
       isAnonymous,
       urgency,
-      status: 'pending',
+      status: 'submitted',
       createdAt: nowIso,
-      upvotes: 1,
-      userUpvoted: true,
+      upvotes: 0,
       timeline: [
         {
           id: `t-${Date.now()}-1`,
           timestamp: nowIso,
-          status: 'pending',
+          status: 'submitted',
           noteBn: isAdvice
             ? 'নাগরিকের মূল্যবান উপদেশ ও পরামর্শ জনসেবা সিস্টেমে গৃহীত হয়েছে। নেতৃত্বের পর্যালোচনার অপেক্ষায়।'
             : 'নাগরিকের অভিযোগটি জনসেবা সিস্টেমে গৃহীত হয়েছে। প্রাথমিক পর্যালোচনার অপেক্ষায়।',
@@ -158,8 +170,7 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
     setIsSubmitting(true);
     try {
       // সার্ভার আসল ট্র্যাকিং কোড তৈরি করে; সেটাই নাগরিককে দেখানো হয়
-      const created = await onSubmit(newProblem);
-      rememberCode(created.trackingCode);
+      const created = await onSubmit({ ...newProblem, consent: true });
       if (!isAnonymous) rememberContact(cleanName, formatBdMobile(normalizedPhone));
       setSubmittedCode(created.trackingCode);
     } catch (err) {
@@ -194,6 +205,8 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
     setSpecificLocation('');
     setUrgency('normal');
     setErrorMsg('');
+    setCategory('');
+    setConsent(false);
     onClose();
   };
 
@@ -353,8 +366,31 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
               </div>
             )}
 
-            {/* Ward & Category in 2 columns */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* ১. আগে বিষয় বাছাই (ড্রপডাউন): এরপর বাকি ঘর */}
+            <div className="p-4 rounded-2xl bg-emerald-50 border-2 border-emerald-200">
+              <label htmlFor="report-topic" className="block text-base font-bold text-emerald-950 mb-2">
+                {language === 'bn' ? '১. আপনার সমস্যাটি কী বিষয়ে?' : '1. What is your report about?'} <span className="text-red-500">*</span>
+              </label>
+              <select
+                id="report-topic"
+                required
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="w-full px-4 py-3.5 text-lg font-semibold bg-white border-2 border-emerald-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
+              >
+                <option value="" disabled>
+                  {language === 'bn' ? 'বিষয় বেছে নিন…' : 'Choose a topic…'}
+                </option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {language === 'bn' ? c.nameBn : c.nameEn}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* ওয়ার্ড */}
+            <div className="grid grid-cols-1 gap-4">
               <div>
                 <label className="block text-xs font-bold text-neutral-700 uppercase tracking-wider mb-1.5">
                   {isAdvice
@@ -381,27 +417,6 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
                 </select>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-neutral-700 uppercase tracking-wider mb-1.5">
-                  {isAdvice
-                    ? language === 'bn'
-                      ? 'পরামর্শের খাত / বিষয়'
-                      : 'Category of Suggestion'
-                    : strings.formCategory}{' '}
-                  <span className="text-red-500">*</span>
-                </label>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="w-full px-3.5 py-2.5 text-sm bg-neutral-50 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:bg-white"
-                >
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {language === 'bn' ? c.nameBn : c.nameEn}
-                    </option>
-                  ))}
-                </select>
-              </div>
             </div>
 
             {/* Title */}
@@ -590,6 +605,30 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
               )}
             </div>
 
+            {/* গোপনীয়তা সম্মতি */}
+            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={consent}
+                  onChange={(e) => setConsent(e.target.checked)}
+                  className="mt-1 w-6 h-6 shrink-0 accent-emerald-700"
+                />
+                <span className="text-sm sm:text-base text-neutral-800 leading-relaxed">
+                  {language === 'bn'
+                    ? 'আমি আমার নাম, মোবাইল নম্বর ও অভিযোগের তথ্য এই কাজে ব্যবহারের জন্য সম্মতি দিচ্ছি। তথ্য সুরক্ষিত থাকবে এবং কখনো প্রকাশ করা হবে না।'
+                    : 'I consent to my name, mobile number and report details being used for this purpose. The data is kept protected and never published.'}
+                </span>
+              </label>
+              <button
+                type="button"
+                onClick={onOpenPrivacy}
+                className="mt-2 ml-9 text-sm font-bold text-emerald-800 underline underline-offset-2 cursor-pointer"
+              >
+                {language === 'bn' ? 'গোপনীয়তা নীতি পড়ুন' : 'Read the privacy policy'}
+              </button>
+            </div>
+
             {/* Actions */}
             <div className="flex items-center justify-end gap-3 pt-4 border-t border-neutral-100">
               <button
@@ -601,7 +640,7 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={isSubmitting}
+                disabled={isSubmitting || !consent}
                 className={`px-6 py-3 text-base font-bold text-white active:scale-95 rounded-xl shadow-sm transition-all cursor-pointer disabled:opacity-60 ${
                   isAdvice
                     ? 'bg-indigo-700 hover:bg-indigo-800'

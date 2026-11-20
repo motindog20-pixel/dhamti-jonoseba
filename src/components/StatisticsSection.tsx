@@ -1,274 +1,194 @@
 import React from 'react';
-import { AreaStat, CategoryStat, Language } from '../types';
-import { UI_STRINGS } from '../data/mockData';
-import { 
-  Users, 
-  CheckCircle, 
-  Clock, 
-  Percent, 
-  MapPin, 
-  Layers,
-  ArrowUpRight
-} from 'lucide-react';
+import { Language, PublicStats } from '../types';
+import { CATEGORIES, INITIAL_AREAS } from '../data/mockData';
+import { Users, CheckCircle, Clock, MapPin, Layers, ShieldCheck } from 'lucide-react';
 
 interface StatisticsSectionProps {
   language: Language;
-  areas: AreaStat[];
-  categories: CategoryStat[];
-  selectedWard: string;
-  onSelectWard: (ward: string) => void;
-  totalSubmissions: number;
-  totalResolved: number;
-  totalInProgress: number;
+  stats: PublicStats | null;
+  wardVillages: Record<string, string>;
 }
 
-export const StatisticsSection: React.FC<StatisticsSectionProps> = ({
-  language,
-  areas,
-  categories,
-  selectedWard,
-  onSelectWard,
-  totalSubmissions,
-  totalResolved,
-  totalInProgress,
-}) => {
-  const strings = UI_STRINGS[language];
-  const resolutionPercentage = totalSubmissions > 0 ? Math.round((totalResolved / totalSubmissions) * 100) : 0;
+/** ৫-এর কম হলে সার্ভার সংখ্যা পাঠায় না (null); আমরা "৫-এর কম" লিখি */
+const fmt = (n: number | null | undefined, bn: boolean): string => {
+  if (n === null || n === undefined) return bn ? '৫-এর কম' : 'Fewer than 5';
+  return n.toLocaleString(bn ? 'bn-BD' : 'en-US');
+};
+
+const monthLabel = (m: string, bn: boolean): string => {
+  const [y, mo] = m.split('-').map(Number);
+  if (!y || !mo) return m;
+  return new Date(y, mo - 1, 1).toLocaleDateString(bn ? 'bn-BD' : 'en-US', { year: 'numeric', month: 'long' });
+};
+
+export const StatisticsSection: React.FC<StatisticsSectionProps> = ({ language, stats, wardVillages }) => {
+  const bn = language === 'bn';
+  const catName = (id: string) => {
+    const c = CATEGORIES.find((x) => x.id === id);
+    return c ? (bn ? c.nameBn : c.nameEn) : id;
+  };
+  const maxCat = Math.max(1, ...(stats?.categories.map((c) => c.count) || [1]));
+  const maxMonth = Math.max(1, ...(stats?.monthly.map((m) => m.count) || [1]));
 
   return (
     <section id="statistics" className="py-12 sm:py-16 bg-neutral-50/70 border-b border-neutral-200">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        
-        {/* Section Header */}
-        <div className="text-center max-w-3xl mx-auto mb-10">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="text-center max-w-3xl mx-auto mb-8">
           <span className="text-xs font-semibold text-emerald-800 uppercase tracking-wider block">
-            {language === 'bn' ? 'স্বচ্ছ নাগরিক ডেটা' : 'Citizen Transparency'}
+            {bn ? 'স্বচ্ছ নাগরিক তথ্য' : 'Citizen Transparency'}
           </span>
           <h2 className="text-2xl sm:text-3xl font-bold text-neutral-900 mt-1 font-serif-bangla leading-[1.3]">
-            {strings.statsHeading}
+            {bn ? 'ধামতী ইউনিয়নের অভিযোগ ও পরামর্শের পরিসংখ্যান' : 'Complaints & Suggestions Statistics, Dhamti Union'}
           </h2>
           <p className="text-sm sm:text-base text-neutral-600 mt-2 leading-relaxed">
-            {strings.statsSubheading}
+            {bn
+              ? 'এখানে শুধু মোট সংখ্যা দেখানো হয়। কারও নাম, নম্বর বা অভিযোগের লেখা কখনো প্রকাশ করা হয় না।'
+              : 'Only overall counts are shown. No name, number or report text is ever published.'}
           </p>
         </div>
 
-        {/* 4 Core Quantitative Proof Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-12">
-          {/* Total Submissions */}
-          <div className="bg-white p-5 rounded-2xl border border-neutral-200 shadow-xs flex flex-col justify-between">
-            <div className="flex items-center justify-between text-neutral-500 mb-2">
-              <span className="text-xs font-medium uppercase tracking-wider">
-                {strings.totalReported}
-              </span>
-              <Users className="w-5 h-5 text-neutral-600" />
+        {!stats ? (
+          <p className="text-center text-neutral-500 py-10">{bn ? 'পরিসংখ্যান লোড হচ্ছে…' : 'Loading statistics…'}</p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-5 mb-10">
+              {[
+                { icon: Users, label: bn ? 'মোট জমা' : 'Total received', value: fmt(stats.total, bn), tone: 'text-neutral-900' },
+                { icon: Layers, label: bn ? 'জমা হয়েছে (নতুন)' : 'New', value: fmt(stats.submitted, bn), tone: 'text-neutral-900' },
+                { icon: Clock, label: bn ? 'পর্যালোচনাধীন' : 'Under review', value: fmt(stats.underReview, bn), tone: 'text-blue-800' },
+                { icon: CheckCircle, label: bn ? 'পর্যালোচনা সম্পন্ন' : 'Review done', value: fmt(stats.reviewDone, bn), tone: 'text-emerald-800' },
+              ].map((c) => (
+                <div key={c.label} className="bg-white p-4 sm:p-5 rounded-2xl border border-neutral-200 shadow-xs">
+                  <div className="flex items-center gap-1.5 text-neutral-500 mb-2">
+                    <c.icon className="w-4 h-4" aria-hidden="true" />
+                    <span className="text-xs font-medium">{c.label}</span>
+                  </div>
+                  <div className={`text-2xl sm:text-3xl font-bold ${c.tone}`}>{c.value}</div>
+                </div>
+              ))}
             </div>
-            <div>
-              <span className="text-3xl sm:text-4xl font-extrabold text-neutral-900 font-mono-num">
-                {totalSubmissions.toLocaleString()}
-              </span>
-              <p className="text-xs text-neutral-500 mt-1">
-                {language === 'bn' ? 'সচেতন নাগরিক কর্তৃক দাখিলকৃত' : 'Logged by local residents'}
-              </p>
-            </div>
-          </div>
 
-          {/* Resolved */}
-          <div className="bg-white p-5 rounded-2xl border border-neutral-200 shadow-xs flex flex-col justify-between">
-            <div className="flex items-center justify-between text-emerald-700 mb-2">
-              <span className="text-xs font-medium uppercase tracking-wider">
-                {strings.totalResolved}
-              </span>
-              <CheckCircle className="w-5 h-5 text-emerald-600" />
-            </div>
-            <div>
-              <span className="text-3xl sm:text-4xl font-extrabold text-emerald-700 font-mono-num">
-                {totalResolved.toLocaleString()}
-              </span>
-              <p className="text-xs text-neutral-500 mt-1">
-                {language === 'bn' ? 'বাস্তবে সমাধান ও রিপোর্ট আপডেট' : 'Verified completed actions'}
-              </p>
-            </div>
-          </div>
-
-          {/* In Progress */}
-          <div className="bg-white p-5 rounded-2xl border border-neutral-200 shadow-xs flex flex-col justify-between">
-            <div className="flex items-center justify-between text-amber-600 mb-2">
-              <span className="text-xs font-medium uppercase tracking-wider">
-                {strings.totalInProgress}
-              </span>
-              <Clock className="w-5 h-5 text-amber-500" />
-            </div>
-            <div>
-              <span className="text-3xl sm:text-4xl font-extrabold text-amber-600 font-mono-num">
-                {totalInProgress.toLocaleString()}
-              </span>
-              <p className="text-xs text-neutral-500 mt-1">
-                {language === 'bn' ? 'মাঠ পর্যায়ে কাজ চলছে' : 'Active work in the field'}
-              </p>
-            </div>
-          </div>
-
-          {/* Resolution Rate */}
-          <div className="bg-white p-5 rounded-2xl border border-neutral-200 shadow-xs flex flex-col justify-between">
-            <div className="flex items-center justify-between text-blue-700 mb-2">
-              <span className="text-xs font-medium uppercase tracking-wider">
-                {strings.resolutionRate}
-              </span>
-              <Percent className="w-5 h-5 text-blue-600" />
-            </div>
-            <div>
-              <div className="flex items-baseline gap-1">
-                <span className="text-3xl sm:text-4xl font-extrabold text-blue-700 font-mono-num">
-                  {resolutionPercentage}
-                </span>
-                <span className="text-xl font-bold text-blue-700">%</span>
-              </div>
-              <p className="text-xs text-neutral-500 mt-1">
-                {language === 'bn' ? 'গড় নিস্পত্তি সময় ৪৮ ঘণ্টা' : 'Avg. turnaround 48 hrs'}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Area / Ward-wise Breakdown Grid from sketch */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          
-          {/* Left 8 cols: Area-wise Problems Table / Cards */}
-          <div className="lg:col-span-8 bg-white p-6 rounded-2xl border border-neutral-200 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-neutral-100">
-              <div>
-                <h3 className="text-lg font-bold text-neutral-900 flex items-center gap-2">
-                  <MapPin className="w-5 h-5 text-emerald-700" />
-                  <span>{language === 'bn' ? 'এলাকা অনুযায়ী সমস্যার তালিকা ও অগ্রগতি' : 'Area-wise Problems & Resolutions'}</span>
+            <div className="grid md:grid-cols-2 gap-6 sm:gap-8">
+              <div className="bg-white p-5 rounded-2xl border border-neutral-200">
+                <h3 className="flex items-center gap-2 text-base font-bold text-neutral-900 mb-4">
+                  <MapPin className="w-4 h-4 text-emerald-700" aria-hidden="true" /> {bn ? 'ওয়ার্ড অনুযায়ী' : 'By ward'}
                 </h3>
-                <p className="text-xs text-neutral-500 mt-0.5">
-                  {language === 'bn' 
-                    ? 'ওয়ার্ডে ক্লিক করে সরাসরি সেই এলাকার সমস্যাগুলো ফিল্টার করুন' 
-                    : 'Click any ward to filter grievances for that specific area'}
+                <p className="text-xs text-neutral-500 mb-3">
+                  {bn ? 'ওয়ার্ডে চাপুন, কোন বিষয়ে কতটি অভিযোগ তা দেখুন।' : 'Tap a ward to see how many reports per topic.'}
                 </p>
+                <ul className="space-y-2">
+                  {stats.wards.map((w) => {
+                    const area = INITIAL_AREAS.find((a) => a.wardNumber === w.ward);
+                    const villages = (wardVillages[w.ward] || '').trim();
+                    const top = w.categories[0];
+                    const maxW = Math.max(1, ...w.categories.map((c) => c.count), w.otherCount || 0);
+                    return (
+                      <li key={w.ward} className="rounded-xl border border-neutral-200 overflow-hidden">
+                        <details>
+                          <summary className="cursor-pointer list-none px-3 py-3 flex items-start justify-between gap-3 active:bg-neutral-50">
+                            <span className="min-w-0">
+                              <span className="block text-sm font-bold text-neutral-900">{area ? (bn ? area.wardNameBn : area.wardNameEn) : w.ward}</span>
+                              {villages && <span className="block text-xs text-neutral-500 truncate">{villages}</span>}
+                              {top && (
+                                <span className="block text-xs text-emerald-800 font-semibold mt-0.5">
+                                  {bn ? 'সবচেয়ে বেশি: ' : 'Top: '}
+                                  {catName(top.id)} ({fmt(top.count, bn)})
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-base font-extrabold text-neutral-900 shrink-0">{fmt(w.total, bn)}</span>
+                          </summary>
+                          <div className="px-3 pb-3 pt-1 border-t border-neutral-100 bg-neutral-50/60">
+                            {w.categories.length === 0 && (w.otherCount === 0 || w.otherCount === null) ? (
+                              <p className="text-xs text-neutral-500 py-2">
+                                {bn ? 'বিষয়ভিত্তিক সংখ্যা দেখাতে যথেষ্ট অভিযোগ এখনো জমা হয়নি।' : 'Not enough reports yet to show a topic breakdown.'}
+                              </p>
+                            ) : (
+                              <ul className="space-y-2.5 pt-2">
+                                {w.categories.map((c) => (
+                                  <li key={c.id}>
+                                    <div className="flex justify-between text-sm mb-1">
+                                      <span className="font-semibold text-neutral-800">{catName(c.id)}</span>
+                                      <span className="font-bold text-neutral-900">{fmt(c.count, bn)}</span>
+                                    </div>
+                                    <div className="h-2 rounded-full bg-neutral-200 overflow-hidden">
+                                      <div className="h-full bg-emerald-600" style={{ width: `${Math.round((c.count / maxW) * 100)}%` }} />
+                                    </div>
+                                  </li>
+                                ))}
+                                {(w.otherCount || 0) > 0 && (
+                                  <li className="flex justify-between text-sm text-neutral-600">
+                                    <span>{bn ? 'অন্যান্য বিষয় (কম সংখ্যক)' : 'Other (small counts)'}</span>
+                                    <span className="font-bold">{fmt(w.otherCount, bn)}</span>
+                                  </li>
+                                )}
+                              </ul>
+                            )}
+                          </div>
+                        </details>
+                      </li>
+                    );
+                  })}
+                </ul>
               </div>
 
-              {selectedWard && (
-                <button
-                  type="button"
-                  onClick={() => onSelectWard('')}
-                  className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 underline cursor-pointer self-start sm:self-auto"
-                >
-                  {language === 'bn' ? 'সকল ওয়ার্ড দেখুন' : 'Show All Wards'}
-                </button>
-              )}
-            </div>
-
-            <div className="space-y-3">
-              {areas.map((area) => {
-                const isSelected = selectedWard === area.wardNumber;
-                const percentage = area.totalProblems > 0 ? Math.round((area.resolvedProblems / area.totalProblems) * 100) : 0;
-
-                return (
-                  <div
-                    key={area.wardNumber}
-                    onClick={() => onSelectWard(isSelected ? '' : area.wardNumber)}
-                    className={`p-4 rounded-xl border transition-all cursor-pointer ${
-                      isSelected
-                        ? 'border-emerald-700 bg-emerald-50/50 shadow-xs'
-                        : 'border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50/60'
-                    }`}
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5">
-                        <span className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs ${
-                          isSelected ? 'bg-emerald-700 text-white' : 'bg-neutral-100 text-neutral-700'
-                        }`}>
-                          {area.wardNumber.replace('ward-', '#')}
-                        </span>
-                        <div>
-                          <h4 className="text-sm font-bold text-neutral-900">
-                            {language === 'bn' ? area.wardNameBn : area.wardNameEn}
-                          </h4>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-4 sm:text-right shrink-0">
-                        <div>
-                          <div className="text-xs text-neutral-500">
-                            {language === 'bn' ? 'আবেদন / সমাধান' : 'Reports / Resolved'}
+              <div className="space-y-6">
+                <div className="bg-white p-5 rounded-2xl border border-neutral-200">
+                  <h3 className="text-base font-bold text-neutral-900 mb-4">{bn ? 'সমস্যার ধরন অনুযায়ী' : 'By type'}</h3>
+                  {stats.categories.length === 0 && !stats.otherSmallCategories ? (
+                    <p className="text-sm text-neutral-500">{bn ? 'যথেষ্ট সংখ্যক অভিযোগ জমা হলে এখানে দেখা যাবে।' : 'Shown once enough reports are received.'}</p>
+                  ) : (
+                    <ul className="space-y-3">
+                      {stats.categories.map((c) => (
+                        <li key={c.id}>
+                          <div className="flex justify-between text-sm mb-1">
+                            <span className="font-semibold text-neutral-800">{catName(c.id)}</span>
+                            <span className="font-bold text-neutral-900">{fmt(c.count, bn)}</span>
                           </div>
-                          <div className="text-sm font-bold text-neutral-900 font-mono-num">
-                            <span className="text-emerald-700">{area.resolvedProblems}</span> / {area.totalProblems}
+                          <div className="h-2 rounded-full bg-neutral-100 overflow-hidden">
+                            <div className="h-full bg-emerald-600" style={{ width: `${Math.round((c.count / maxCat) * 100)}%` }} />
                           </div>
-                        </div>
-                        <div className="w-16 text-right">
-                          <span className="text-xs font-bold text-neutral-900 font-mono-num">{percentage}%</span>
-                          <div className="w-full bg-neutral-200 h-1.5 rounded-full overflow-hidden mt-1">
-                            <div 
-                              className="bg-emerald-600 h-full rounded-full" 
-                              style={{ width: `${percentage}%` }}
-                            />
-                          </div>
-                        </div>
-                        <ArrowUpRight className={`w-4 h-4 transition-transform ${isSelected ? 'text-emerald-700 rotate-90' : 'text-neutral-400'}`} />
-                      </div>
-                    </div>
+                        </li>
+                      ))}
+                      {(stats.otherSmallCategories ?? 0) > 0 && (
+                        <li className="flex justify-between text-sm text-neutral-600">
+                          <span>{bn ? 'অন্যান্য (কম সংখ্যক বিষয়)' : 'Other (small counts)'}</span>
+                          <span className="font-bold">{fmt(stats.otherSmallCategories, bn)}</span>
+                        </li>
+                      )}
+                    </ul>
+                  )}
+                </div>
+
+                {stats.monthly.length > 0 && (
+                  <div className="bg-white p-5 rounded-2xl border border-neutral-200">
+                    <h3 className="text-base font-bold text-neutral-900 mb-4">{bn ? 'মাস অনুযায়ী' : 'By month'}</h3>
+                    <ul className="space-y-2">
+                      {stats.monthly.map((m) => (
+                        <li key={m.month} className="flex items-center gap-3 text-sm">
+                          <span className="w-28 shrink-0 text-neutral-700">{monthLabel(m.month, bn)}</span>
+                          <span className="flex-1 h-2 rounded-full bg-neutral-100 overflow-hidden">
+                            <span className="block h-full bg-emerald-600" style={{ width: `${Math.round((m.count / maxMonth) * 100)}%` }} />
+                          </span>
+                          <span className="w-10 text-right font-bold text-neutral-900">{fmt(m.count, bn)}</span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Right 4 cols: Category Distribution Breakdown */}
-          <div className="lg:col-span-4 bg-white p-6 rounded-2xl border border-neutral-200 shadow-xs">
-            <h3 className="text-lg font-bold text-neutral-900 flex items-center gap-2 mb-1">
-              <Layers className="w-5 h-5 text-emerald-700" />
-              <span>{language === 'bn' ? 'সমস্যার প্রধান খাতসমূহ' : 'Categories of Problems'}</span>
-            </h3>
-            <p className="text-xs text-neutral-500 mb-6">
-              {language === 'bn' 
-                ? 'নাগরিকদের দায়েরকৃত অভিযোগের খাতওয়ারী বিভাজন' 
-                : 'Distribution of complaints across public sectors'}
-            </p>
-
-            <div className="space-y-4">
-              {categories.map((cat) => {
-                const totalCatCount = categories.reduce((acc, c) => acc + c.count, 0);
-                const percent = Math.round((cat.count / totalCatCount) * 100);
-
-                return (
-                  <div key={cat.id} className="group">
-                    <div className="flex items-center justify-between text-xs font-medium mb-1.5">
-                      <span className="text-neutral-800">
-                        {language === 'bn' ? cat.nameBn : cat.nameEn}
-                      </span>
-                      <span className="text-neutral-500 font-mono-num">
-                        {cat.count} ({percent}%)
-                      </span>
-                    </div>
-                    <div className="w-full bg-neutral-100 h-2 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${percent}%`,
-                          backgroundColor: cat.color
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
+                )}
+              </div>
             </div>
 
-            {/* Direct Leader Commitment Quote */}
-            <div className="mt-8 pt-6 border-t border-neutral-100 bg-emerald-50/60 p-4 rounded-xl border border-emerald-100">
-              <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider block">
-                {language === 'bn' ? 'মোঃ আনোয়ার হোসেন ভূঁইয়া' : 'Md. Anwar Hossain Bhuiyan'}
+            <p className="mt-6 flex items-start justify-center gap-1.5 text-xs text-neutral-500 text-center">
+              <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" aria-hidden="true" />
+              <span>
+                {bn
+                  ? 'পাঁচটির কম হলে সংখ্যা লুকানো থাকে, যাতে কোনো ব্যক্তিকে চেনা না যায়।'
+                  : 'Counts below five are hidden so that no individual can be identified.'}
               </span>
-              <p className="text-xs text-neutral-700 italic mt-1 leading-relaxed">
-                {strings.leaderDirectQuote}
-              </p>
-            </div>
-          </div>
-
-        </div>
-
+            </p>
+          </>
+        )}
       </div>
     </section>
   );

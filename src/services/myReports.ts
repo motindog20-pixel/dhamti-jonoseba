@@ -1,29 +1,8 @@
 /**
- * "এই ফোনে জমা দেওয়া অভিযোগ" মনে রাখা। লগইন বা কোড মনে রাখার ঝামেলা ছাড়াই
- * নাগরিক পরে 'অবস্থা দেখুন' থেকে নিজের অভিযোগ দেখতে পারেন।
- * শুধু ট্র্যাকিং কোড ও পূর্বের নাম/নম্বর এই ফোনের ব্রাউজারেই থাকে, সার্ভারে নয়।
+ * এই ফোনে আগে দেওয়া নাম ও মোবাইল নম্বর মনে রাখা (ফর্ম ও 'অবস্থা দেখুন'-এ নিজে থেকে বসে)।
+ * এগুলো শুধু এই ফোনের ব্রাউজারেই থাকে, সার্ভারে নয়। অভিযোগের কোনো তথ্য এখানে রাখা হয় না।
  */
-const KEY_CODES = 'dhamti_my_reports_v1';
 const KEY_CONTACT = 'dhamti_contact_v1';
-
-export function readMyCodes(): string[] {
-  try {
-    const raw = localStorage.getItem(KEY_CODES);
-    const list = raw ? JSON.parse(raw) : [];
-    return Array.isArray(list) ? list.filter((c) => typeof c === 'string').slice(0, 30) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function rememberCode(code: string): void {
-  try {
-    const list = [code, ...readMyCodes().filter((c) => c !== code)].slice(0, 30);
-    localStorage.setItem(KEY_CODES, JSON.stringify(list));
-  } catch {
-    // ব্রাউজার সংরক্ষণ বন্ধ থাকলে সমস্যা নেই
-  }
-}
 
 export function readContact(): { name: string; phone: string } {
   try {

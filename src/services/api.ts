@@ -1,4 +1,4 @@
-import { ProblemReport, ManifestoItem, LeaderProfile, ProblemStatus } from '../types';
+import { ProblemReport, ManifestoItem, LeaderProfile, ProblemStatus, PublicStats } from '../types';
 
 export interface DbStatusInfo {
   connected: boolean;
@@ -33,6 +33,26 @@ async function ensureOk(res: Response, fallback: string): Promise<void> {
   throw new ApiError(message, res.status);
 }
 
+export class NeedsTwoFactorError extends ApiError {}
+
+export interface AdminSessionInfo {
+  authenticated: boolean;
+  configured: boolean;
+  role?: 'owner';
+  twoFactor?: boolean;
+  encryption?: boolean;
+}
+
+export interface AuditEntry {
+  id: number;
+  at: string;
+  actor: string;
+  role: string;
+  action: string;
+  target: string;
+  detail: string;
+}
+
 const jsonHeaders = { 'Content-Type': 'application/json' };
 
 /** ওয়ার্ড আইডি (ward-01…) → গ্রামের নাম */
@@ -42,9 +62,9 @@ export interface SiteSettings {
 
 export const api = {
   // Admin auth (সার্ভার-সাইড সেশন কুকি)
-  async adminSession(): Promise<{ authenticated: boolean; configured: boolean }> {
+  async adminSession(): Promise<AdminSessionInfo> {
     try {
-      const res = await fetch('/api/admin/session', { credentials: 'same-origin' });
+      const res = await fetch('/api/admin/session', { credentials: 'same-origin', cache: 'no-store' });
       if (!res.ok) return { authenticated: false, configured: false };
       return await res.json();
     } catch {
@@ -52,14 +72,27 @@ export const api = {
     }
   },
 
-  async adminLogin(password: string): Promise<void> {
+  /** দুই ধাপের লগইন চালু থাকলে প্রথমবার NeedsTwoFactorError আসে; তখন ৬ অঙ্কের কোডসহ আবার ডাকুন */
+  async adminLogin(password: string, code?: string): Promise<void> {
     const res = await fetch('/api/admin/login', {
       method: 'POST',
       credentials: 'same-origin',
       headers: jsonHeaders,
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ password, code }),
     });
-    await ensureOk(res, 'লগইন করা যায়নি।');
+    if (!res.ok) {
+      let message = 'লগইন করা যায়নি।';
+      let needs2fa = false;
+      try {
+        const data = await res.json();
+        if (typeof data?.error === 'string') message = data.error;
+        needs2fa = data?.needs2fa === true;
+      } catch {
+        // JSON নয়
+      }
+      if (needs2fa) throw new NeedsTwoFactorError(message, res.status);
+      throw new ApiError(message, res.status);
+    }
   },
 
   async adminLogout(): Promise<void> {
@@ -88,27 +121,27 @@ export const api = {
     return await res.json();
   },
 
-  // নম্বর বা ট্র্যাকিং কোড দিয়ে অভিযোগের অবস্থা। না পেলে ফাঁকা তালিকা।
-  async track(query: string): Promise<ProblemReport[]> {
+  // মোবাইল নম্বর দিয়ে অভিযোগের অবস্থা (কোড লাগে না)। না পেলে ফাঁকা তালিকা।
+  async track(phone: string): Promise<ProblemReport[]> {
     const res = await fetch('/api/track', {
       method: 'POST',
       credentials: 'same-origin',
       headers: jsonHeaders,
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ phone }),
     });
     if (res.status === 404) return [];
     await ensureOk(res, 'অনুসন্ধান করা যায়নি। আবার চেষ্টা করুন।');
     return await res.json();
   },
 
-  // Problems
-  async getProblems(): Promise<ProblemReport[]> {
-    const res = await fetch('/api/problems');
-    await ensureOk(res, 'সার্ভারে সমস্যা হয়েছে। আবার চেষ্টা করুন।');
+  // সবার জন্য: শুধু সমষ্টিগত পরিসংখ্যান (৫-এর কম সংখ্যা সার্ভারই লুকিয়ে রাখে)
+  async getStats(): Promise<PublicStats> {
+    const res = await fetch('/api/stats');
+    await ensureOk(res, 'পরিসংখ্যান আনা যায়নি।');
     return await res.json();
   },
 
-  async createProblem(problem: ProblemReport): Promise<ProblemReport> {
+  async createProblem(problem: ProblemReport & { consent: boolean }): Promise<ProblemReport> {
     const res = await fetch('/api/problems', {
       method: 'POST',
       credentials: 'same-origin',
@@ -122,27 +155,26 @@ export const api = {
   async updateProblemStatus(
     id: string,
     status: ProblemStatus,
-    noteText: string,
-    officerName: string
+    noteText: string
   ): Promise<ProblemReport> {
     const res = await fetch(`/api/problems/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       credentials: 'same-origin',
       headers: jsonHeaders,
-      body: JSON.stringify({ status, noteText, officerName }),
+      body: JSON.stringify({ status, noteText }),
     });
     await ensureOk(res, 'সার্ভারে সমস্যা হয়েছে। আবার চেষ্টা করুন।');
     return await res.json();
   },
 
-  async upvoteProblem(id: string, delta: number = 1): Promise<{ id: string; upvotes: number }> {
-    const res = await fetch(`/api/problems/${encodeURIComponent(id)}/upvote`, {
-      method: 'POST',
+  async classifyProblem(id: string, category: string, urgency: string): Promise<ProblemReport> {
+    const res = await fetch(`/api/problems/${encodeURIComponent(id)}/classify`, {
+      method: 'PATCH',
       credentials: 'same-origin',
       headers: jsonHeaders,
-      body: JSON.stringify({ delta }),
+      body: JSON.stringify({ category, urgency }),
     });
-    await ensureOk(res, 'সার্ভারে সমস্যা হয়েছে। আবার চেষ্টা করুন।');
+    await ensureOk(res, 'সংরক্ষণ করা যায়নি।');
     return await res.json();
   },
 
@@ -269,5 +301,48 @@ export const api = {
     });
     await ensureOk(res, 'সংরক্ষণ করা যায়নি। আবার চেষ্টা করুন।');
     return await res.json();
+  },
+
+  // ---- নিরাপত্তা (শুধু মূল প্রশাসক) ----
+  async twoFactorSetup(password: string): Promise<{ secret: string; uri: string }> {
+    const res = await fetch('/api/admin/2fa/setup', { method: 'POST', credentials: 'same-origin', headers: jsonHeaders, body: JSON.stringify({ password }) });
+    await ensureOk(res, 'চালু করা যায়নি।');
+    return await res.json();
+  },
+
+  async twoFactorEnable(code: string): Promise<void> {
+    const res = await fetch('/api/admin/2fa/enable', { method: 'POST', credentials: 'same-origin', headers: jsonHeaders, body: JSON.stringify({ code }) });
+    await ensureOk(res, 'চালু করা যায়নি।');
+  },
+
+  async twoFactorDisable(password: string, code: string): Promise<void> {
+    const res = await fetch('/api/admin/2fa/disable', { method: 'POST', credentials: 'same-origin', headers: jsonHeaders, body: JSON.stringify({ password, code }) });
+    await ensureOk(res, 'বন্ধ করা যায়নি।');
+  },
+
+  async getAudit(): Promise<AuditEntry[]> {
+    const res = await fetch('/api/admin/audit', { credentials: 'same-origin', cache: 'no-store' });
+    await ensureOk(res, 'খাতা আনা যায়নি।');
+    return await res.json();
+  },
+
+  /** CSV নামানোর আগে ডাকুন, যেন খাতায় "কে কখন নামাল" থাকে */
+  async logExport(): Promise<void> {
+    await fetch('/api/admin/export-log', { method: 'POST', credentials: 'same-origin' }).catch(() => undefined);
+  },
+
+  /** পূর্ণ ব্যাকআপ (নাম-ফোনসহ) ফাইল হিসেবে নামায় */
+  async downloadBackup(): Promise<void> {
+    const res = await fetch('/api/admin/backup', { credentials: 'same-origin', cache: 'no-store' });
+    await ensureOk(res, 'ব্যাকআপ নেওয়া যায়নি।');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `dhamti-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
   },
 };
