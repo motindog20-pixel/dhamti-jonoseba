@@ -8,7 +8,7 @@ coverage/
 !.env.example
 
 # লোকাল ডেটাবেস ফাইল (এখানে নাগরিকের তথ্য থাকতে পারে, রিপোতে রাখবেন না)
-data/
+/data/
 *.db
 *.db-journal
 .vercel

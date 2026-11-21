@@ -57,6 +57,8 @@ Storage/writes are effectively unlimited. **Row reads are the bottleneck**: the 
 - Don't put secrets in the repo or chat. `.env.example` lists names only.
 - Image fonts in this sandbox: no Hind Siliguri; only FreeSans/FreeSerif have Bengali. Social images are rendered with Playwright from HTML.
 
+- **`.gitignore` must say `/data/` (root only), never `data/`:** `data/` also hides `src/data/*` so new files there silently never reach GitHub/Vercel (2026-11-22: `statuses.ts` missing → Vercel build "Could not resolve ../data/statuses"). After adding files, run `git status --ignored` and test a clean `git checkout-index -a --prefix=<dir>/` bundle with esbuild.
+
 ## 8. Open items / ideas (owner's backlog, roughly by priority)
 1. **Before launch (owner):** set `DATA_ENCRYPTION_KEY` on Vercel + keep an offline copy; turn on 2FA; take first backup; legal adviser reviews privacy policy text; confirm election/launch dates with the election officer; enter 9 wards' villages + real office address; run the smoke test on his phone.
 2. (done 2026-11-21) timeline notes are now sealed.
@@ -72,7 +74,8 @@ Storage/writes are effectively unlimited. **Row reads are the bottleneck**: the 
 Six-month plan toward the public release on **1 April 2027** is in `ROADMAP-bn.md` (phases Dec–Mar, launch checklist, risks). Election day per owner: **27 May 2027** (an Oct-2026 news item listed 27 May as UP phase 7, not final) — owner must confirm the official schedule with the district election officer. Freeze code 22 Mar; no code changes in the vote week (16–26 May) except critical fixes. When a phase item ships, tick it off there.
 
 ## 10. Log (newest first)
-- 2026-11-21: timeline (status notes) sealed at rest + write-guard for wrong key; 148 checks. Branch preview deploy of `claude/security-overhaul` FAILED on Vercel (cause unknown, waiting for the owner's build log; main untouched).
+- 2026-11-22: found the Vercel preview failure: `.gitignore` `data/` hid `src/data/statuses.ts`. Fixed (`/data/`), file committed; clean-checkout bundle OK, 148 checks pass.
+- 2026-11-21: timeline (status notes) sealed at rest + write-guard for wrong key; 148 checks. Branch preview deploy FAILED (cause found 2026-11-22, see above).
 - 2026-11-20: topic dropdown first in the complaint form (+ `drugs`, `other` topics); per-ward topic counts in public stats.
 - 2026-11-20: security overhaul (branch `claude/security-overhaul`): public stats only (k<5), phone-only tracking, 6 statuses, privacy policy + consent, owner-only admin with DB sessions, optional TOTP 2FA, AES-GCM encryption + blind index, append-only audit log, backup/restore, rate limits, "নিরাপত্তা" admin tab; assistants/upvotes/public list removed; 138 integration checks.
 - 2026-11-19: roadmap written (ROADMAP-bn.md); CLAUDE.md memory added; link-preview image v3 (white bg); admin tab renamed "পেজের তথ্য"; tsconfig `types` fix; admin editing of photo/headline/villages shipped; first live deploy on owner's fork; env vars set; admin login confirmed working.
