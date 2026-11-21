@@ -44,7 +44,7 @@ Storage/writes are effectively unlimited. **Row reads are the bottleneck**: the 
 
 ## 6. Testing & deploy workflow
 - Syntax check (no installs needed): `tsc --ignoreConfig --noEmit --noResolve --skipLibCheck --jsx react-jsx --target ES2022 --module ESNext --moduleResolution bundler --allowImportingTsExtensions --types "" <files>` and grep `TS1xxx`. (With `--noResolve`, TS18046/TS2538/TS7053 are resolution artifacts, not bugs.)
-- Server integration tests (138 checks: privacy, consent, phone-only tracking, k<5 stats, admin gate, sessions/logout, 2FA incl. replay, audit append-only, backup/restore, encryption + key migration, rate limits, legacy-status migration, photo, settings): `PATH=$PATH:/opt/npm-tools/node_modules/.bin bash dev-tools/run-itest.sh` (Node 22 + tsx; no network; stubs for express/@libsql/dotenv). **Add a test for every new endpoint.** UI smoke check: bundle components with esbuild and `renderToString` (lucide-react stubbed) to catch render crashes; `esbuild --bundle --packages=external src/main.tsx` catches missing exports.
+- Server integration tests (148 checks: privacy, consent, phone-only tracking, k<5 stats, admin gate, sessions/logout, 2FA incl. replay, audit append-only, backup/restore, encryption + key migration, rate limits, legacy-status migration, photo, settings): `PATH=$PATH:/opt/npm-tools/node_modules/.bin bash dev-tools/run-itest.sh` (Node 22 + tsx; no network; stubs for express/@libsql/dotenv). **Add a test for every new endpoint.** UI smoke check: bundle components with esbuild and `renderToString` (lucide-react stubbed) to catch render crashes; `esbuild --bundle --packages=external src/main.tsx` catches missing exports.
 - Claude's cloud sandbox cannot reach the live site, npm, or Vercel. A full `vite build` / real-browser run is not possible there: always ask the owner to verify on his phone and send screenshots. Check deploy status with `gh api repos/motindog20-pixel/dhamti-jonoseba/commits/<sha>/status`.
 - Push: owner authorised pushing straight to `main` of his repo (Vercel auto-deploys in ~1–2 min). Commit trailers: `Co-Authored-By: Claude …` + session link as instructed by the harness.
 - Production smoke test after each deploy: `/api/manifesto` returns JSON · `/api/stats` has numbers only · `/api/problems` is 404 · admin login (+2FA code if on) works · test complaint from another phone · track by number shows status but no text · admin "নিরাপত্তা" tab shows encryption ON · delete test data.
@@ -53,13 +53,13 @@ Storage/writes are effectively unlimited. **Row reads are the bottleneck**: the 
 - **Hooks:** in `AdminSectionModal` all `useState` must stay above the `if (!isOpen) return null`.
 - **Bengali Unicode:** "য়", "ড়", "ঢ়" may be precomposed (U+09DF/U+09DC/U+09DD) or base+nukta. Compare with `.normalize('NFC')`; in scripted edits anchor on ASCII (e.g. `value={editSubSlogan}`) and assert the match count, otherwise replacements silently fail.
 - The browser may cache only public data (profile, villages, manifesto `…_v2`) and the user's own name/phone (`dhamti_contact_v1`); never complaint lists. `App.tsx` deletes the legacy keys `dhamti_real_problems_v1` and `dhamti_my_reports_v1`.
-- Status notes are stored in the `timeline` JSON **unencrypted** (known gap, see §8).
+- The `timeline` JSON (status notes) is sealed too; with a wrong/missing key it reads as empty and `updateProblemStatus` refuses to write (so history can't be wiped). Never change `DATA_ENCRYPTION_KEY` once real data exists.
 - Don't put secrets in the repo or chat. `.env.example` lists names only.
 - Image fonts in this sandbox: no Hind Siliguri; only FreeSans/FreeSerif have Bengali. Social images are rendered with Playwright from HTML.
 
 ## 8. Open items / ideas (owner's backlog, roughly by priority)
 1. **Before launch (owner):** set `DATA_ENCRYPTION_KEY` on Vercel + keep an offline copy; turn on 2FA; take first backup; legal adviser reviews privacy policy text; confirm election/launch dates with the election officer; enter 9 wards' villages + real office address; run the smoke test on his phone.
-2. Known gap: timeline notes (`timeline` JSON, owner-written) are not sealed; seal them if notes might hold personal details.
+2. (done 2026-11-21) timeline notes are now sealed.
 3. Email/Telegram alert to the owner on every new complaint (needs his email + a free Resend/Telegram bot).
 4. Admin list pagination (50/page) before heavy traffic.
 5. "কাজের হিসাব" section, "আমার সম্পর্কে" page, QR code + WhatsApp/Facebook share buttons, bigger thank-you screen.
@@ -72,6 +72,7 @@ Storage/writes are effectively unlimited. **Row reads are the bottleneck**: the 
 Six-month plan toward the public release on **1 April 2027** is in `ROADMAP-bn.md` (phases Dec–Mar, launch checklist, risks). Election day per owner: **27 May 2027** (an Oct-2026 news item listed 27 May as UP phase 7, not final) — owner must confirm the official schedule with the district election officer. Freeze code 22 Mar; no code changes in the vote week (16–26 May) except critical fixes. When a phase item ships, tick it off there.
 
 ## 10. Log (newest first)
+- 2026-11-21: timeline (status notes) sealed at rest + write-guard for wrong key; 148 checks. Branch preview deploy of `claude/security-overhaul` FAILED on Vercel (cause unknown, waiting for the owner's build log; main untouched).
 - 2026-11-20: topic dropdown first in the complaint form (+ `drugs`, `other` topics); per-ward topic counts in public stats.
 - 2026-11-20: security overhaul (branch `claude/security-overhaul`): public stats only (k<5), phone-only tracking, 6 statuses, privacy policy + consent, owner-only admin with DB sessions, optional TOTP 2FA, AES-GCM encryption + blind index, append-only audit log, backup/restore, rate limits, "নিরাপত্তা" admin tab; assistants/upvotes/public list removed; 138 integration checks.
 - 2026-11-19: roadmap written (ROADMAP-bn.md); CLAUDE.md memory added; link-preview image v3 (white bg); admin tab renamed "পেজের তথ্য"; tsconfig `types` fix; admin editing of photo/headline/villages shipped; first live deploy on owner's fork; env vars set; admin login confirmed working.

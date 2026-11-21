@@ -326,6 +326,16 @@ const wrong = (await call('GET', '/api/admin/problems', { cookie })).json.find((
 ok('wrong key: data is unreadable (empty), never leaked or crashed', wrong && wrong.phone === '' && wrong.description === '');
 process.env.DATA_ENCRYPTION_KEY = goodKey;
 ok('right key restores access', (await call('GET', '/api/admin/problems', { cookie })).json.find((p) => p.id === cid)?.phone === '01712345678');
+ok('T18 timeline (status notes) is encrypted at rest', (await db.execute(`SELECT timeline FROM problems`)).rows.every((x) => String(x.timeline).startsWith('enc1:')) && !JSON.stringify((await db.execute(`SELECT timeline FROM problems`)).rows).includes('ফোনে কথা'));
+{
+  const goodKey2 = process.env.DATA_ENCRYPTION_KEY;
+  process.env.DATA_ENCRYPTION_KEY = 'WRONG'.repeat(10);
+  const bad = await call('PATCH', `/api/problems/${cid}`, { cookie, body: { status: 'under_review' } });
+  const wrongView = (await call('GET', '/api/admin/problems', { cookie })).json.find((p) => p.id === cid);
+  process.env.DATA_ENCRYPTION_KEY = goodKey2;
+  const okView = (await call('GET', '/api/admin/problems', { cookie })).json.find((p) => p.id === cid);
+  ok('wrong key cannot overwrite (and so destroy) sealed history', bad.status === 500 && wrongView.timeline.length === 0 && okView.timeline.length >= 3 && okView.timeline.some((t) => /ফোনে কথা/.test(t.noteBn)), JSON.stringify({ s: bad.status, w: wrongView.timeline.length, o: okView.timeline.length }));
+}
 bk = JSON.parse(String((await call('GET', '/api/admin/backup', { cookie })).body));
 ok('backup is readable plaintext for the owner (decrypted)', bk.problems.some((p) => p.phone === '01712345678'));
 

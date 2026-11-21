@@ -258,13 +258,26 @@ export function invalidateStatsCache() {
   statsCache = null;
 }
 
-function rowToProblem(row: Record<string, unknown>): ProblemReport {
-  let timeline: ProblemReport['timeline'] = [];
+/** কাজের ইতিহাস (টাইমলাইন) JSON; এনক্রিপশন চালু থাকলে পুরোটা কোড করা অবস্থায় থাকে */
+function readTimeline(raw: unknown): any[] {
   try {
-    timeline = typeof row.timeline === 'string' ? JSON.parse(row.timeline) : [];
+    const text = unseal(typeof raw === 'string' ? raw : '');
+    const list = text ? JSON.parse(text) : [];
+    return Array.isArray(list) ? list : [];
   } catch {
-    timeline = [];
+    return [];
   }
+}
+/** এনক্রিপ্ট করা কিন্তু এখন পড়া যাচ্ছে না (চাবি নেই/ভুল)? তাহলে ইতিহাস মুছে ফেলার ঝুঁকি, তাই লিখতে দেওয়া হয় না */
+function timelineUnreadable(raw: unknown): boolean {
+  return typeof raw === 'string' && isSealed(raw) && unseal(raw) === '';
+}
+function writeTimeline(list: unknown[]): string {
+  return seal(JSON.stringify(list || []));
+}
+
+function rowToProblem(row: Record<string, unknown>): ProblemReport {
+  const timeline = readTimeline(row.timeline) as ProblemReport['timeline'];
   return {
     id: String(row.id),
     trackingCode: String(row.tracking_code),
@@ -337,7 +350,7 @@ export async function insertProblem(problem: ProblemReport, consentAt = ''): Pro
       problem.status,
       problem.createdAt,
       problem.upvotes || 0,
-      JSON.stringify(problem.timeline || []),
+      writeTimeline(problem.timeline || []),
       problem.assignedOfficer || '',
       seal(problem.resolutionNote || ''),
       phoneBlindIndex(normalizeBdMobile(problem.phone) || ''),
@@ -375,12 +388,10 @@ export async function updateProblemStatus(
   if (existing.rows.length === 0) return null;
 
   const row = existing.rows[0];
-  let timeline: any[] = [];
-  try {
-    timeline = typeof row.timeline === 'string' ? JSON.parse(row.timeline) : [];
-  } catch {
-    timeline = [];
+  if (timelineUnreadable(row.timeline)) {
+    throw new Error('DATA_ENCRYPTION_KEY ভুল বা নেই, তাই এই অভিযোগের ইতিহাস পড়া যাচ্ছে না। আগে সঠিক চাবি বসান।');
   }
+  const timeline: any[] = readTimeline(row.timeline);
 
   timeline.push({
     id: `ev-${Date.now()}`,
@@ -395,7 +406,7 @@ export async function updateProblemStatus(
     sql: `UPDATE problems SET status = ?, timeline = ?, assigned_officer = ?, resolution_note = ? WHERE id = ?`,
     args: [
       newStatus,
-      JSON.stringify(timeline),
+      writeTimeline(timeline),
       authorName || (row.assigned_officer as string) || '',
       noteText ? seal(noteText) : (row.resolution_note as string) || '',
       id,
@@ -523,12 +534,8 @@ async function runProblemMigrations() {
     const rows = await db.execute(`SELECT id, status, timeline FROM problems`);
     for (const r of rows.rows) {
       const oldStatus = String(r.status);
-      let timeline: any[] = [];
-      try {
-        timeline = JSON.parse(String(r.timeline || '[]'));
-      } catch {
-        timeline = [];
-      }
+      if (timelineUnreadable(r.timeline)) continue;
+      const timeline: any[] = readTimeline(r.timeline);
       let changed = false;
       for (const ev of timeline) {
         if (ev && LEGACY_STATUS_MAP[ev.status]) {
@@ -540,7 +547,7 @@ async function runProblemMigrations() {
       if (changed || newStatus !== oldStatus) {
         await db.execute({
           sql: `UPDATE problems SET status = ?, timeline = ? WHERE id = ?`,
-          args: [newStatus, JSON.stringify(timeline), r.id as string],
+          args: [newStatus, writeTimeline(timeline), r.id as string],
         });
       }
     }
@@ -563,7 +570,8 @@ export async function rebuildProtectedColumns() {
     `SELECT COUNT(*) AS c FROM problems WHERE (phone_hash = '' AND phone != '')` +
       (encOn
         ? ` OR (phone != '' AND phone NOT LIKE 'enc1:%') OR (citizen_name != '' AND citizen_name NOT LIKE 'enc1:%')` +
-          ` OR (description != '' AND description NOT LIKE 'enc1:%') OR (title != '' AND title NOT LIKE 'enc1:%')`
+          ` OR (description != '' AND description NOT LIKE 'enc1:%') OR (title != '' AND title NOT LIKE 'enc1:%')` +
+          ` OR (timeline != '' AND timeline NOT LIKE 'enc1:%')`
         : '')
   );
   if (!schemeChanged && Number(pending.rows[0]?.c ?? 0) === 0) return;
@@ -582,8 +590,11 @@ export async function rebuildProtectedColumns() {
     if (!readable) continue;
     const resRaw = String(rec.resolution_note ?? '');
     const res = unseal(resRaw);
+    const tlRaw = String(rec.timeline ?? '');
+    const tlPlain = unseal(tlRaw);
+    if (tlRaw !== '' && isSealed(tlRaw) && tlPlain === '') continue; // চাবি নেই/ভুল: ছুঁই না
     await db.execute({
-      sql: `UPDATE problems SET title = ?, description = ?, specific_location = ?, citizen_name = ?, phone = ?, resolution_note = ?, phone_hash = ? WHERE id = ?`,
+      sql: `UPDATE problems SET title = ?, description = ?, specific_location = ?, citizen_name = ?, phone = ?, resolution_note = ?, timeline = ?, phone_hash = ? WHERE id = ?`,
       args: [
         seal(plain.title),
         seal(plain.description),
@@ -591,6 +602,7 @@ export async function rebuildProtectedColumns() {
         seal(plain.citizen_name),
         seal(plain.phone),
         seal(res),
+        seal(tlPlain),
         phoneBlindIndex(normalizeBdMobile(plain.phone) || ''),
         String(rec.id),
       ],
@@ -740,7 +752,7 @@ export async function restoreBackup(data: any): Promise<{ problems: number; mani
         LEGACY_STATUS_MAP[p.status as string] || p.status,
         p.createdAt,
         p.upvotes || 0,
-        JSON.stringify(p.timeline || []),
+        writeTimeline(p.timeline || []),
         p.assignedOfficer || '',
         seal(p.resolutionNote || ''),
         phoneBlindIndex(normalizeBdMobile(p.phone) || ''),
