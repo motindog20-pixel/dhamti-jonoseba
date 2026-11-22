@@ -30,7 +30,7 @@
   }
 
   body {
-    font-family: 'Hind Siliguri', 'Noto Sans Bengali', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: 'Inter', 'Hind Siliguri', 'Noto Sans Bengali', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     letter-spacing: normal;
@@ -40,24 +40,24 @@
   
   /* Natural Editorial Bengali Typography */
   .font-serif-bangla {
-    font-family: 'Hind Siliguri', 'Noto Sans Bengali', sans-serif;
+    font-family: 'Inter', 'Hind Siliguri', 'Noto Sans Bengali', sans-serif;
     font-weight: 700;
     letter-spacing: normal !important;
   }
 
   .font-sans-bangla {
-    font-family: 'Hind Siliguri', 'Noto Sans Bengali', sans-serif;
+    font-family: 'Inter', 'Hind Siliguri', 'Noto Sans Bengali', sans-serif;
     letter-spacing: normal !important;
   }
 
   .font-heading {
-    font-family: 'Hind Siliguri', 'Noto Sans Bengali', sans-serif;
+    font-family: 'Inter', 'Hind Siliguri', 'Noto Sans Bengali', sans-serif;
     font-weight: 700;
     letter-spacing: normal !important;
   }
 
   .font-mono-num {
-    font-family: 'Hind Siliguri', 'Noto Sans Bengali', sans-serif;
+    font-family: 'Inter', 'Hind Siliguri', 'Noto Sans Bengali', sans-serif;
     font-variant-numeric: tabular-nums;
   }
 
