@@ -125,19 +125,21 @@ ok('T07 too many wrong lookups from one IP -> 429', last.status === 429, String(
 r = await call('POST', '/api/track', { body: { phone: '01712345678' }, ip: '77.7.7.7' });
 ok('blocked IP cannot look up even a valid number meanwhile', r.status === 429);
 
-// =============== 4. পাবলিক পরিসংখ্যান (৫-এর কম লুকানো) ===============
+// =============== 4. পাবলিক পরিসংখ্যান (সব সংখ্যা সত্যিকারের, ০ সহ) ===============
 dbm.invalidateStatsCache();
 r = await call('GET', '/api/stats');
 const s1 = r.json;
 ok('T04 stats reachable w/o login', r.status === 200 && typeof s1?.total === 'number');
-ok('stats hide counts below 5 (ward total null, no categories)', s1.wards.find((w) => w.ward === 'ward-03').total === null && s1.categories.length === 0 && s1.submitted === null, JSON.stringify(s1));
+const ALL_TOPICS = ['drugs', 'road', 'safety', 'waste', 'drainage', 'water', 'lighting', 'other'];
+ok('stats list every dropdown topic for every ward (zeros included)', s1.wards.length === 9 && s1.wards.every((w) => w.categories.length === ALL_TOPICS.length && ALL_TOPICS.every((id) => w.categories.some((c) => c.id === id))), JSON.stringify(s1.wards[2]));
+ok('no hidden/null numbers anywhere in stats', s1.wards.every((w) => typeof w.total === 'number') && typeof s1.submitted === 'number' && typeof s1.reviewDone === 'number' && typeof s1.underReview === 'number' && s1.categories.length === ALL_TOPICS.length);
+ok('small counts are exact (ward-03 total equals what was submitted)', s1.wards.find((w) => w.ward === 'ward-03').total >= 1 && s1.wards.find((w) => w.ward === 'ward-03').total === s1.wards.find((w) => w.ward === 'ward-03').categories.reduce((a, c) => a + c.count, 0), JSON.stringify(s1.wards.find((w) => w.ward === 'ward-03')));
 let st = JSON.stringify(s1);
 ok('stats contain no names/phones/titles/ids', !/রহিম|করিম|01\d{9}|JNS-|prob-|রাস্তা ভাঙা/.test(st));
 for (let i = 0; i < 2; i++) await call('POST', '/api/problems', { body: { ...good, citizenName: 'অন্য নাগরিক', phone: '0181111111' + i } });
 dbm.invalidateStatsCache();
 const s2 = (await call('GET', '/api/stats')).json;
-ok('ward-03 count appears once it reaches 5', s2.wards.find((w) => w.ward === 'ward-03').total === 7 || s2.wards.find((w) => w.ward === 'ward-03').total >= 5, JSON.stringify(s2.wards.find((w) => w.ward === 'ward-03')));
-ok('category "road" now listed (≥5)', s2.categories.some((c) => c.id === 'road' && c.count >= 5));
+ok('ward-03 count grows by exactly 2', s2.wards.find((w) => w.ward === 'ward-03').total === s1.wards.find((w) => w.ward === 'ward-03').total + 2);
 ok('stats still contain no private data', !/রহিম|অন্য নাগরিক|01\d{9}|JNS-/.test(JSON.stringify(s2)));
 
 // ---- ওয়ার্ডভিত্তিক বিষয়-গণনা (যেমন ওয়ার্ড ১: মাদক ৫০, রাস্তা ৩০) ----
@@ -156,11 +158,13 @@ await submitMany('ward-02', 'drugs', 6); await submitMany('ward-02', 'road', 5);
 dbm.invalidateStatsCache();
 const sw = (await call('GET', '/api/stats')).json;
 const w1 = sw.wards.find((w) => w.ward === 'ward-01'), w2 = sw.wards.find((w) => w.ward === 'ward-02');
-ok('T17 ward 2 lists topics with counts, biggest first', w2.total === 11 && w2.categories.length === 2 && w2.categories[0].id === 'drugs' && w2.categories[0].count === 6 && w2.categories[1].id === 'road' && w2.categories[1].count === 5 && w2.otherCount === 0, JSON.stringify(w2));
-ok('ward 1: tiny topic never shown; small remainder merged so it cannot be subtracted out', w1.total === 14 && w1.categories.every((c) => c.count >= 5) && !w1.categories.some((c) => c.id === 'waste') && w1.otherCount >= 5 && w1.categories.reduce((a, c) => a + c.count, 0) + w1.otherCount === w1.total, JSON.stringify(w1));
-let leak = false;
-for (const w of sw.wards) { if (w.otherCount !== null && w.otherCount !== 0 && w.otherCount < 5) leak = true; if (w.categories.some((c) => c.count < 5)) leak = true; if (w.total !== null && w.otherCount !== null && w.categories.reduce((a, c) => a + c.count, 0) + w.otherCount !== w.total) leak = true; }
-ok('no ward cell below 5 is ever exposed, directly or by subtraction', !leak);
+const cnt = (w, id) => (w.categories.find((c) => c.id === id) || {}).count;
+ok('T17 ward 2: drugs 6 and road 5 listed biggest first, rest are 0', w2.categories[0].id === 'drugs' && w2.categories[0].count === 6 && w2.categories[1].id === 'road' && w2.categories[1].count === 5 && w2.categories.slice(2).every((c) => c.count === 0), JSON.stringify(w2));
+ok('ward 2 total = sum of topics', w2.total === w2.categories.reduce((a, c) => a + c.count, 0) && w2.total === 11);
+ok('ward 1: single complaint is shown exactly (waste = 1), 8 topics listed', w1.categories.length === 8 && cnt(w1, 'waste') === 1 && cnt(w1, 'drugs') === 7 && cnt(w1, 'road') === 6 && cnt(w1, 'water') === 0, JSON.stringify(w1));
+ok('ward 1 sorted biggest first', w1.categories.every((c, i, arr) => i === 0 || arr[i - 1].count >= c.count));
+ok('every ward total equals the sum of its topics', sw.wards.every((w) => w.total === w.categories.reduce((a, c) => a + c.count, 0)));
+ok('overall topic counts add up to the grand total', sw.categories.reduce((a, c) => a + c.count, 0) === sw.total);
 ok('stats expose no names/phones even with counts', !/টেস্ট নাগরিক|0161\d+|রহিম/.test(JSON.stringify(sw)));
 
 // =============== 5. অ্যাডমিন দরজা ===============

@@ -134,7 +134,7 @@ export const api = {
     return await res.json();
   },
 
-  // সবার জন্য: শুধু সমষ্টিগত পরিসংখ্যান (৫-এর কম সংখ্যা সার্ভারই লুকিয়ে রাখে)
+  // সবার জন্য: শুধু সমষ্টিগত পরিসংখ্যান (সংখ্যা, কারও নাম/লেখা নয়)
   async getStats(): Promise<PublicStats> {
     const res = await fetch('/api/stats');
     await ensureOk(res, 'পরিসংখ্যান আনা যায়নি।');

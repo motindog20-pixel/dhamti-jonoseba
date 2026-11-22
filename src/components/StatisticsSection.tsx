@@ -9,11 +9,16 @@ interface StatisticsSectionProps {
   wardVillages: Record<string, string>;
 }
 
-/** ৫-এর কম হলে সার্ভার সংখ্যা পাঠায় না (null); আমরা "৫-এর কম" লিখি */
-const fmt = (n: number | null | undefined, bn: boolean): string => {
-  if (n === null || n === undefined) return bn ? '৫-এর কম' : 'Fewer than 5';
-  return n.toLocaleString(bn ? 'bn-BD' : 'en-US');
+/** সংখ্যা যেমন আছে তেমনই দেখানো হয় (০ হলে ০) */
+const fmt = (n: number | null | undefined, bn: boolean): string => (n ?? 0).toLocaleString(bn ? 'bn-BD' : 'en-US');
+
+/** শতকরা হার (মোট ০ হলে ০%); ছোট হলে এক দশমিক পর্যন্ত, যাতে ১টি অভিযোগ ০% না দেখায় */
+const pct = (count: number, total: number, bn: boolean): string => {
+  const v = total > 0 ? (count / total) * 100 : 0;
+  const r = v > 0 && v < 10 ? Math.round(v * 10) / 10 : Math.round(v);
+  return `${r.toLocaleString(bn ? 'bn-BD' : 'en-US', { maximumFractionDigits: 1 })}%`;
 };
+const pctNum = (count: number, total: number): number => (total > 0 ? Math.min(100, (count / total) * 100) : 0);
 
 const monthLabel = (m: string, bn: boolean): string => {
   const [y, mo] = m.split('-').map(Number);
@@ -27,7 +32,6 @@ export const StatisticsSection: React.FC<StatisticsSectionProps> = ({ language, 
     const c = CATEGORIES.find((x) => x.id === id);
     return c ? (bn ? c.nameBn : c.nameEn) : id;
   };
-  const maxCat = Math.max(1, ...(stats?.categories.map((c) => c.count) || [1]));
   const maxMonth = Math.max(1, ...(stats?.monthly.map((m) => m.count) || [1]));
 
   return (
@@ -42,8 +46,8 @@ export const StatisticsSection: React.FC<StatisticsSectionProps> = ({ language, 
           </h2>
           <p className="text-sm sm:text-base text-neutral-600 mt-2 leading-relaxed">
             {bn
-              ? 'এখানে শুধু মোট সংখ্যা দেখানো হয়। কারও নাম, নম্বর বা অভিযোগের লেখা কখনো প্রকাশ করা হয় না।'
-              : 'Only overall counts are shown. No name, number or report text is ever published.'}
+              ? 'এখানে শুধু সংখ্যা ও শতকরা হার দেখানো হয়। কারও নাম, নম্বর বা অভিযোগের লেখা কখনো প্রকাশ করা হয় না।'
+              : 'Only counts and percentages are shown. No name, number or report text is ever published.'}
           </p>
         </div>
 
@@ -74,14 +78,13 @@ export const StatisticsSection: React.FC<StatisticsSectionProps> = ({ language, 
                   <MapPin className="w-4 h-4 text-emerald-700" aria-hidden="true" /> {bn ? 'ওয়ার্ড অনুযায়ী' : 'By ward'}
                 </h3>
                 <p className="text-xs text-neutral-500 mb-3">
-                  {bn ? 'ওয়ার্ডে চাপুন, কোন বিষয়ে কতটি অভিযোগ তা দেখুন।' : 'Tap a ward to see how many reports per topic.'}
+                  {bn ? 'ওয়ার্ডে চাপুন, কোন বিষয়ে কতটি অভিযোগ ও কত শতাংশ তা দেখুন।' : 'Tap a ward to see how many reports and what share per topic.'}
                 </p>
                 <ul className="space-y-2">
                   {stats.wards.map((w) => {
                     const area = INITIAL_AREAS.find((a) => a.wardNumber === w.ward);
                     const villages = (wardVillages[w.ward] || '').trim();
                     const top = w.categories[0];
-                    const maxW = Math.max(1, ...w.categories.map((c) => c.count), w.otherCount || 0);
                     return (
                       <li key={w.ward} className="rounded-xl border border-neutral-200 overflow-hidden">
                         <details>
@@ -89,41 +92,31 @@ export const StatisticsSection: React.FC<StatisticsSectionProps> = ({ language, 
                             <span className="min-w-0">
                               <span className="block text-sm font-bold text-neutral-900">{area ? (bn ? area.wardNameBn : area.wardNameEn) : w.ward}</span>
                               {villages && <span className="block text-xs text-neutral-500 truncate">{villages}</span>}
-                              {top && (
+                              {top && top.count > 0 && (
                                 <span className="block text-xs text-emerald-800 font-semibold mt-0.5">
                                   {bn ? 'সবচেয়ে বেশি: ' : 'Top: '}
-                                  {catName(top.id)} ({fmt(top.count, bn)})
+                                  {catName(top.id)} ({fmt(top.count, bn)}, {pct(top.count, w.total, bn)})
                                 </span>
                               )}
                             </span>
                             <span className="text-base font-extrabold text-neutral-900 shrink-0">{fmt(w.total, bn)}</span>
                           </summary>
                           <div className="px-3 pb-3 pt-1 border-t border-neutral-100 bg-neutral-50/60">
-                            {w.categories.length === 0 && (w.otherCount === 0 || w.otherCount === null) ? (
-                              <p className="text-xs text-neutral-500 py-2">
-                                {bn ? 'বিষয়ভিত্তিক সংখ্যা দেখাতে যথেষ্ট অভিযোগ এখনো জমা হয়নি।' : 'Not enough reports yet to show a topic breakdown.'}
-                              </p>
-                            ) : (
-                              <ul className="space-y-2.5 pt-2">
-                                {w.categories.map((c) => (
-                                  <li key={c.id}>
-                                    <div className="flex justify-between text-sm mb-1">
-                                      <span className="font-semibold text-neutral-800">{catName(c.id)}</span>
-                                      <span className="font-bold text-neutral-900">{fmt(c.count, bn)}</span>
-                                    </div>
-                                    <div className="h-2 rounded-full bg-neutral-200 overflow-hidden">
-                                      <div className="h-full bg-emerald-600" style={{ width: `${Math.round((c.count / maxW) * 100)}%` }} />
-                                    </div>
-                                  </li>
-                                ))}
-                                {(w.otherCount || 0) > 0 && (
-                                  <li className="flex justify-between text-sm text-neutral-600">
-                                    <span>{bn ? 'অন্যান্য বিষয় (কম সংখ্যক)' : 'Other (small counts)'}</span>
-                                    <span className="font-bold">{fmt(w.otherCount, bn)}</span>
-                                  </li>
-                                )}
-                              </ul>
-                            )}
+                            <ul className="space-y-2.5 pt-2">
+                              {w.categories.map((c) => (
+                                <li key={c.id}>
+                                  <div className="flex justify-between gap-3 text-sm mb-1">
+                                    <span className="font-semibold text-neutral-800">{catName(c.id)}</span>
+                                    <span className="font-bold text-neutral-900 shrink-0">
+                                      {fmt(c.count, bn)}{bn ? 'টি' : ''} · {pct(c.count, w.total, bn)}
+                                    </span>
+                                  </div>
+                                  <div className="h-2 rounded-full bg-neutral-200 overflow-hidden">
+                                    <div className="h-full bg-emerald-600" style={{ width: `${pctNum(c.count, w.total)}%` }} />
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
                           </div>
                         </details>
                       </li>
@@ -135,29 +128,21 @@ export const StatisticsSection: React.FC<StatisticsSectionProps> = ({ language, 
               <div className="space-y-6">
                 <div className="bg-white p-5 rounded-2xl border border-neutral-200">
                   <h3 className="text-base font-bold text-neutral-900 mb-4">{bn ? 'সমস্যার ধরন অনুযায়ী' : 'By type'}</h3>
-                  {stats.categories.length === 0 && !stats.otherSmallCategories ? (
-                    <p className="text-sm text-neutral-500">{bn ? 'যথেষ্ট সংখ্যক অভিযোগ জমা হলে এখানে দেখা যাবে।' : 'Shown once enough reports are received.'}</p>
-                  ) : (
-                    <ul className="space-y-3">
-                      {stats.categories.map((c) => (
-                        <li key={c.id}>
-                          <div className="flex justify-between text-sm mb-1">
-                            <span className="font-semibold text-neutral-800">{catName(c.id)}</span>
-                            <span className="font-bold text-neutral-900">{fmt(c.count, bn)}</span>
-                          </div>
-                          <div className="h-2 rounded-full bg-neutral-100 overflow-hidden">
-                            <div className="h-full bg-emerald-600" style={{ width: `${Math.round((c.count / maxCat) * 100)}%` }} />
-                          </div>
-                        </li>
-                      ))}
-                      {(stats.otherSmallCategories ?? 0) > 0 && (
-                        <li className="flex justify-between text-sm text-neutral-600">
-                          <span>{bn ? 'অন্যান্য (কম সংখ্যক বিষয়)' : 'Other (small counts)'}</span>
-                          <span className="font-bold">{fmt(stats.otherSmallCategories, bn)}</span>
-                        </li>
-                      )}
-                    </ul>
-                  )}
+                  <ul className="space-y-3">
+                    {stats.categories.map((c) => (
+                      <li key={c.id}>
+                        <div className="flex justify-between gap-3 text-sm mb-1">
+                          <span className="font-semibold text-neutral-800">{catName(c.id)}</span>
+                          <span className="font-bold text-neutral-900 shrink-0">
+                            {fmt(c.count, bn)}{bn ? 'টি' : ''} · {pct(c.count, stats.total, bn)}
+                          </span>
+                        </div>
+                        <div className="h-2 rounded-full bg-neutral-100 overflow-hidden">
+                          <div className="h-full bg-emerald-600" style={{ width: `${pctNum(c.count, stats.total)}%` }} />
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
 
                 {stats.monthly.length > 0 && (
@@ -183,8 +168,8 @@ export const StatisticsSection: React.FC<StatisticsSectionProps> = ({ language, 
               <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" aria-hidden="true" />
               <span>
                 {bn
-                  ? 'পাঁচটির কম হলে সংখ্যা লুকানো থাকে, যাতে কোনো ব্যক্তিকে চেনা না যায়।'
-                  : 'Counts below five are hidden so that no individual can be identified.'}
+                  ? 'শুধু সংখ্যা ও শতকরা হার দেখানো হয়। কে অভিযোগ করেছেন বা কী লিখেছেন তা কখনো প্রকাশ করা হয় না।'
+                  : 'Only counts and percentages are shown. Who complained or what they wrote is never published.'}
               </span>
             </p>
           </>

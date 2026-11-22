@@ -288,7 +288,7 @@ export default function App() {
           onOpenReportModal={() => setIsReportModalOpen(true)}
         />
 
-        {/* সমষ্টিগত পরিসংখ্যান (৫-এর কম লুকানো) */}
+        {/* সমষ্টিগত পরিসংখ্যান (সংখ্যা ও শতাংশ, ব্যক্তিগত তথ্য নয়) */}
         <StatisticsSection language={language} stats={stats} wardVillages={wardVillages} />
       </main>
 

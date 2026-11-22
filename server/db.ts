@@ -437,8 +437,7 @@ export async function deleteProblem(id: string): Promise<boolean> {
 // পাবলিক পরিসংখ্যান (ব্যক্তিগত রেকর্ড থেকে আলাদা, শুধু সমষ্টি)
 // ==========================================
 
-/** কোনো ঘরে এর কম অভিযোগ থাকলে সংখ্যা প্রকাশ হয় না (ছোট নমুনা থেকে পরিচয় অনুমান ঠেকাতে) */
-export const MIN_PUBLIC_COUNT = 5;
+/** পাবলিক পরিসংখ্যান ক্যাশের সময় (মালিকের সিদ্ধান্ত ২০২৬-১১-২২: ছোট সংখ্যাও লুকানো হবে না, ০ হলে ০ দেখাবে) */
 const STATS_TTL_MS = 30_000;
 
 export async function getPublicStats(): Promise<PublicStats> {
@@ -447,6 +446,7 @@ export async function getPublicStats(): Promise<PublicStats> {
   const grouped = await db.execute(`SELECT ward, category, status, COUNT(*) AS c FROM problems GROUP BY ward, category, status`);
   const months = await db.execute(`SELECT SUBSTR(created_at, 1, 7) AS m, COUNT(*) AS c FROM problems GROUP BY SUBSTR(created_at, 1, 7) ORDER BY m DESC LIMIT 12`);
 
+  const categoryIds = new Set<string>(CATEGORIES.map((c) => c.id));
   let total = 0;
   const byStatus: Record<string, number> = {};
   const byWard: Record<string, number> = {};
@@ -455,7 +455,8 @@ export async function getPublicStats(): Promise<PublicStats> {
   for (const r of grouped.rows) {
     const c = Number(r.c);
     const ward = String(r.ward);
-    const cat = String(r.category);
+    // তালিকার বাইরের পুরনো বিষয় "অন্যান্য"-তে গোনা হয়
+    const cat = categoryIds.has(String(r.category)) ? String(r.category) : 'other';
     total += c;
     byStatus[String(r.status)] = (byStatus[String(r.status)] || 0) + c;
     byWard[ward] = (byWard[ward] || 0) + c;
@@ -463,49 +464,27 @@ export async function getPublicStats(): Promise<PublicStats> {
     (byWardCategory[ward] ||= {})[cat] = ((byWardCategory[ward] || {})[cat] || 0) + c;
   }
 
-  const hide = (n: number | undefined): number | null => (n && n >= MIN_PUBLIC_COUNT ? n : null);
-  const categoryIds = new Set<string>(CATEGORIES.map((c) => c.id));
-
-  /**
-   * ধরন অনুযায়ী ভাগ: ৫-এর কম ঘর "অন্যান্য"-তে মেশে। অন্যান্য-এর যোগফল ১–৪ হলে সবচেয়ে ছোট দৃশ্যমান ঘরটিও
-   * সেখানে মিশিয়ে দেওয়া হয়, নইলে মোট থেকে বিয়োগ করে ছোট ঘরের সংখ্যা বের করা যেত।
-   */
-  const bucketize = (counts: Record<string, number>) => {
-    const visible: { id: string; count: number }[] = [];
-    let rest = 0;
-    for (const [id, n] of Object.entries(counts)) {
-      if (n >= MIN_PUBLIC_COUNT && categoryIds.has(id)) visible.push({ id, count: n });
-      else rest += n;
-    }
-    visible.sort((a, b) => a.count - b.count);
-    while (rest > 0 && rest < MIN_PUBLIC_COUNT && visible.length) rest += visible.shift()!.count;
-    visible.sort((a, b) => b.count - a.count);
-    return { items: visible, other: rest === 0 ? 0 : rest >= MIN_PUBLIC_COUNT ? rest : null };
-  };
-
-  const overall = bucketize(byCategory);
-  const categories = overall.items;
-  const wards = INITIAL_AREAS.map((a) => {
-    const b = bucketize(byWardCategory[a.wardNumber] || {});
-    return { ward: a.wardNumber, total: hide(byWard[a.wardNumber]), categories: b.items, otherCount: b.other };
-  });
+  /** ফর্মের ড্রপডাউনের সব বিষয়, বেশি থেকে কম; সংখ্যা না থাকলে ০। সমান হলে ড্রপডাউনের ক্রম বজায় থাকে। */
+  const allCategories = (counts: Record<string, number>) =>
+    CATEGORIES.map((c, order) => ({ id: c.id, count: counts[c.id] || 0, order }))
+      .sort((a, b) => b.count - a.count || a.order - b.order)
+      .map(({ id, count }) => ({ id, count }));
 
   const value: PublicStats = {
     generatedAt: new Date().toISOString(),
     total,
-    reviewDone: hide(byStatus['review_done']),
-    underReview: hide(
-      (byStatus['under_review'] || 0) + (byStatus['need_info'] || 0) + (byStatus['guidance_given'] || 0) + (byStatus['contacted'] || 0)
-    ),
-    submitted: hide(byStatus['submitted']),
-    wards,
-    categories,
-    otherSmallCategories: overall.other,
-    // শুধু মাস (দিন নয়), আর ৫-এর কম হলে মাসটিই বাদ
-    monthly: months.rows
-      .map((r) => ({ month: String(r.m), count: Number(r.c) }))
-      .filter((m) => m.count >= MIN_PUBLIC_COUNT)
-      .reverse(),
+    reviewDone: byStatus['review_done'] || 0,
+    underReview:
+      (byStatus['under_review'] || 0) + (byStatus['need_info'] || 0) + (byStatus['guidance_given'] || 0) + (byStatus['contacted'] || 0),
+    submitted: byStatus['submitted'] || 0,
+    wards: INITIAL_AREAS.map((a) => ({
+      ward: a.wardNumber,
+      total: byWard[a.wardNumber] || 0,
+      categories: allCategories(byWardCategory[a.wardNumber] || {}),
+    })),
+    categories: allCategories(byCategory),
+    // শুধু মাস (দিন নয়)
+    monthly: months.rows.map((r) => ({ month: String(r.m), count: Number(r.c) })).reverse(),
   };
   statsCache = { at: Date.now(), value };
   return value;

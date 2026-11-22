@@ -12,17 +12,17 @@ export type ProblemStatus =
 
 export type StaffRole = 'owner';
 
-/** পাবলিক পরিসংখ্যান: null মানে "৫-এর কম" (গোপনীয়তার জন্য সংখ্যা লুকানো) */
+/** পাবলিক পরিসংখ্যান: শুধু সংখ্যা, ব্যক্তিগত তথ্য নয় */
 export interface PublicStats {
   generatedAt: string;
   total: number;
-  reviewDone: number | null;
-  underReview: number | null;
-  submitted: number | null;
-  /** প্রতিটি ওয়ার্ডে ধরন অনুযায়ী সংখ্যা (বেশি থেকে কম); ৫-এর কম ঘর `otherCount`-এ মেশানো */
-  wards: { ward: string; total: number | null; categories: { id: string; count: number }[]; otherCount: number | null }[];
+  reviewDone: number;
+  underReview: number;
+  submitted: number;
+  /** প্রতিটি ওয়ার্ডে ফর্মের সব বিষয়ের সংখ্যা (বেশি থেকে কম, ০ সহ) */
+  wards: { ward: string; total: number; categories: { id: string; count: number }[] }[];
+  /** সব বিষয়ের মোট সংখ্যা (বেশি থেকে কম, ০ সহ) */
   categories: { id: string; count: number }[];
-  otherSmallCategories: number | null;
   monthly: { month: string; count: number }[];
 }
 

@@ -418,7 +418,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                     {language === 'bn' ? 'পর্যালোচনা সম্পন্ন' : 'Reviews Completed'}
                   </span>
                   <span className="text-2xl sm:text-3xl font-extrabold text-emerald-700 font-mono-num mt-1 block">
-                    {resolvedProblemsCount === null ? (language === 'bn' ? '৫-এর কম' : '<5') : resolvedProblemsCount.toLocaleString(language === 'bn' ? 'bn-BD' : 'en-US')}
+                    {resolvedProblemsCount === null ? '—' : resolvedProblemsCount.toLocaleString(language === 'bn' ? 'bn-BD' : 'en-US')}
                   </span>
                 </div>
                 <div className="w-10 h-10 rounded-xl bg-emerald-100/90 flex items-center justify-center text-emerald-700 shrink-0">

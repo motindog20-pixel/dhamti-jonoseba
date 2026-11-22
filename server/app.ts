@@ -497,7 +497,7 @@ export function createApp() {
   // সবার জন্য (পাবলিক)
   // ==========================================
 
-  // শুধু সমষ্টিগত পরিসংখ্যান (ব্যক্তিগত রেকর্ড নয়; ৫-এর কম সংখ্যা লুকানো)
+  // শুধু সমষ্টিগত পরিসংখ্যান (ব্যক্তিগত রেকর্ড নয়)
   app.get('/api/stats', async (_req: Request, res: Response) => {
     try {
       res.setHeader('Cache-Control', 'public, max-age=30');
