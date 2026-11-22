@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Language, PublicStats } from '../types';
 import { CATEGORIES, INITIAL_AREAS } from '../data/mockData';
 import { Users, CheckCircle, Clock, MapPin, Layers, ShieldCheck } from 'lucide-react';
@@ -24,6 +24,55 @@ const monthLabel = (m: string, bn: boolean): string => {
   const [y, mo] = m.split('-').map(Number);
   if (!y || !mo) return m;
   return new Date(y, mo - 1, 1).toLocaleDateString(bn ? 'bn-BD' : 'en-US', { year: 'numeric', month: 'long' });
+};
+
+const TOP_N = 5;
+
+/** ওয়ার্ড খুললে: শীর্ষ ৫টি বিষয় (সংখ্যা ও শতাংশ); বাকিগুলো "সব বিষয় দেখুন" চাপলে */
+const WardTopics: React.FC<{ ward: PublicStats['wards'][number]; bn: boolean; catName: (id: string) => string }> = ({ ward, bn, catName }) => {
+  const [showAll, setShowAll] = useState(false);
+  const rest = ward.categories.length - TOP_N;
+  const list = showAll ? ward.categories : ward.categories.slice(0, TOP_N);
+  return (
+    <div className="px-3 pb-3 pt-1 border-t border-neutral-100 bg-neutral-50/60">
+      <p className="text-xs font-semibold text-neutral-500 pt-2">
+        {showAll
+          ? bn ? 'সব বিষয় (বেশি থেকে কম)' : 'All topics (most to least)'
+          : bn ? `শীর্ষ ${TOP_N.toLocaleString('bn-BD')}টি সমস্যা` : `Top ${TOP_N} issues`}
+        {' · '}
+        {bn ? `মোট ${fmt(ward.total, bn)}টি অভিযোগ` : `${fmt(ward.total, bn)} reports in total`}
+      </p>
+      <ul className="space-y-2.5 pt-2">
+        {list.map((c, i) => (
+          <li key={c.id}>
+            <div className="flex justify-between gap-3 text-sm mb-1">
+              <span className="font-semibold text-neutral-800">
+                <span className="text-neutral-400 mr-1.5">{(i + 1).toLocaleString(bn ? 'bn-BD' : 'en-US')}.</span>
+                {catName(c.id)}
+              </span>
+              <span className="font-bold text-neutral-900 shrink-0">
+                {fmt(c.count, bn)}{bn ? 'টি' : ''} · {pct(c.count, ward.total, bn)}
+              </span>
+            </div>
+            <div className="h-2 rounded-full bg-neutral-200 overflow-hidden">
+              <div className="h-full bg-emerald-600" style={{ width: `${pctNum(c.count, ward.total)}%` }} />
+            </div>
+          </li>
+        ))}
+      </ul>
+      {rest > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          className="mt-3 w-full py-2.5 rounded-xl border border-emerald-200 bg-white text-emerald-800 text-sm font-bold active:bg-emerald-50"
+        >
+          {showAll
+            ? bn ? 'শুধু শীর্ষ ৫টি দেখুন' : 'Show top 5 only'
+            : bn ? `সব বিষয় দেখুন (আরও ${rest.toLocaleString('bn-BD')}টি)` : `Show all topics (${rest} more)`}
+        </button>
+      )}
+    </div>
+  );
 };
 
 export const StatisticsSection: React.FC<StatisticsSectionProps> = ({ language, stats, wardVillages }) => {
@@ -78,7 +127,7 @@ export const StatisticsSection: React.FC<StatisticsSectionProps> = ({ language, 
                   <MapPin className="w-4 h-4 text-emerald-700" aria-hidden="true" /> {bn ? 'ওয়ার্ড অনুযায়ী' : 'By ward'}
                 </h3>
                 <p className="text-xs text-neutral-500 mb-3">
-                  {bn ? 'ওয়ার্ডে চাপুন, কোন বিষয়ে কতটি অভিযোগ ও কত শতাংশ তা দেখুন।' : 'Tap a ward to see how many reports and what share per topic.'}
+                  {bn ? 'ওয়ার্ডে চাপুন, শীর্ষ ৫টি সমস্যা ও কোনটিতে কতটি অভিযোগ (কত শতাংশ) তা দেখুন।' : 'Tap a ward to see its top 5 issues with counts and percentages.'}
                 </p>
                 <ul className="space-y-2">
                   {stats.wards.map((w) => {
@@ -101,23 +150,7 @@ export const StatisticsSection: React.FC<StatisticsSectionProps> = ({ language, 
                             </span>
                             <span className="text-base font-extrabold text-neutral-900 shrink-0">{fmt(w.total, bn)}</span>
                           </summary>
-                          <div className="px-3 pb-3 pt-1 border-t border-neutral-100 bg-neutral-50/60">
-                            <ul className="space-y-2.5 pt-2">
-                              {w.categories.map((c) => (
-                                <li key={c.id}>
-                                  <div className="flex justify-between gap-3 text-sm mb-1">
-                                    <span className="font-semibold text-neutral-800">{catName(c.id)}</span>
-                                    <span className="font-bold text-neutral-900 shrink-0">
-                                      {fmt(c.count, bn)}{bn ? 'টি' : ''} · {pct(c.count, w.total, bn)}
-                                    </span>
-                                  </div>
-                                  <div className="h-2 rounded-full bg-neutral-200 overflow-hidden">
-                                    <div className="h-full bg-emerald-600" style={{ width: `${pctNum(c.count, w.total)}%` }} />
-                                  </div>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
+                          <WardTopics ward={w} bn={bn} catName={catName} />
                         </details>
                       </li>
                     );
