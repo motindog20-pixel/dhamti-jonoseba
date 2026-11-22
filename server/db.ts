@@ -8,6 +8,7 @@ import { INITIAL_MANIFESTO_ITEMS, LEGACY_DEMO_MANIFESTO } from '../src/data/mani
 import { normalizeBdMobile } from '../src/services/phone.js';
 import { seal, unseal, isSealed, isEncryptionEnabled, phoneBlindIndex, phoneIndexScheme } from './crypto.js';
 import { LEGACY_STATUS_MAP } from '../src/data/statuses.js';
+import { verifyPin } from './security.js';
 import { INITIAL_AREAS, CATEGORIES } from '../src/data/mockData.js';
 import type { ProblemStatus, PublicStats, StaffRole } from '../src/types/index.js';
 
@@ -72,6 +73,14 @@ export async function initDatabase() {
     );
   `);
 
+  // 1a. পিন অনুমান ঠেকানো: প্রতি নম্বরে ঘণ্টায় সীমিত চেষ্টা (ডেটাবেসে, তাই সার্ভারলেস ইনস্ট্যান্স বদলালেও থাকে)
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS track_attempts (
+      key TEXT PRIMARY KEY,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      window_start INTEGER NOT NULL DEFAULT 0
+    );
+  `);
   // 1b. সেশন ও নিরীক্ষা-খাতা
   await db.execute(`
     CREATE TABLE IF NOT EXISTS admin_sessions (
@@ -305,17 +314,6 @@ export async function getAllProblems(): Promise<ProblemReport[]> {
   return result.rows.map((row) => rowToProblem(row as unknown as Record<string, unknown>));
 }
 
-/** মোবাইল নম্বর মিললে সেই নম্বরের অভিযোগগুলো (নতুন আগে, সর্বোচ্চ ২০টি)। DB-তে নম্বর খোঁজা হয় ব্লাইন্ড ইনডেক্সে। */
-export async function findProblemsByPhone(normalizedPhone: string): Promise<ProblemReport[]> {
-  const hash = phoneBlindIndex(normalizedPhone);
-  if (!hash) return [];
-  const result = await db.execute({
-    sql: `SELECT * FROM problems WHERE phone_hash = ? ORDER BY created_at DESC LIMIT 20`,
-    args: [hash],
-  });
-  return result.rows.map((row) => rowToProblem(row as unknown as Record<string, unknown>));
-}
-
 /** একই নম্বর থেকে গত সময়ে কতটি জমা হয়েছে (জমার সীমা ঠিক করতে) */
 export async function countRecentByPhone(normalizedPhone: string, sinceIso: string): Promise<number> {
   const hash = phoneBlindIndex(normalizedPhone);
@@ -327,12 +325,64 @@ export async function countRecentByPhone(normalizedPhone: string, sinceIso: stri
   return Number(result.rows[0]?.c ?? 0);
 }
 
-export async function insertProblem(problem: ProblemReport, consentAt = ''): Promise<ProblemReport> {
+/** নম্বর + পিন দুটোই মিললে তবেই সেই অভিযোগগুলো (নতুন আগে)। না মিললে খালি তালিকা; নম্বর আছে কিনা বোঝা যায় না। */
+export async function findProblemsByPhoneAndPin(normalizedPhone: string, pin: string): Promise<ProblemReport[]> {
+  const hash = phoneBlindIndex(normalizedPhone);
+  const rows = hash
+    ? (await db.execute({ sql: `SELECT * FROM problems WHERE phone_hash = ? ORDER BY created_at DESC LIMIT 20`, args: [hash] })).rows
+    : [];
+  if (!rows.length) {
+    verifyPin(pin, null); // নম্বর না থাকলেও সমান সময় খরচ (সময় মেপে বোঝা ঠেকাতে)
+    return [];
+  }
+  const out: ProblemReport[] = [];
+  for (const row of rows) {
+    if (verifyPin(pin, String((row as any).pin_hash || ''))) out.push(rowToProblem(row as unknown as Record<string, unknown>));
+  }
+  return out;
+}
+
+export const PIN_MAX_ATTEMPTS = 5;
+export const PIN_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * একটি চেষ্টা গোনা (যাচাইয়ের আগেই, এক নিমেষে)। প্রতি নম্বরে ঘণ্টায় ৫ বারের বেশি যাচাই হয় না,
+ * একসাথে অনেক অনুরোধ পাঠালেও না। সফল হলে clearPinAttempts দিয়ে গোনা মুছে যায়।
+ */
+export async function consumePinAttempt(normalizedPhone: string): Promise<{ allowed: boolean; retryAfterSec: number }> {
+  const key = phoneBlindIndex(normalizedPhone) || 'none';
+  const now = Date.now();
+  await db.execute({
+    sql: `INSERT INTO track_attempts (key, attempts, window_start) VALUES (?, 1, ?)
+          ON CONFLICT(key) DO UPDATE SET
+            attempts = CASE WHEN ? - window_start > ? THEN 1 ELSE attempts + 1 END,
+            window_start = CASE WHEN ? - window_start > ? THEN ? ELSE window_start END`,
+    args: [key, now, now, PIN_WINDOW_MS, now, PIN_WINDOW_MS, now],
+  });
+  const row = (await db.execute({ sql: `SELECT attempts, window_start FROM track_attempts WHERE key = ?`, args: [key] })).rows[0];
+  const attempts = Number(row?.attempts ?? 1);
+  const start = Number(row?.window_start ?? now);
+  if (attempts <= PIN_MAX_ATTEMPTS) return { allowed: true, retryAfterSec: 0 };
+  return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((start + PIN_WINDOW_MS - now) / 1000)) };
+}
+
+export async function clearPinAttempts(normalizedPhone: string): Promise<void> {
+  const key = phoneBlindIndex(normalizedPhone) || 'none';
+  await db.execute({ sql: `DELETE FROM track_attempts WHERE key = ?`, args: [key] });
+}
+
+/** মালিক নাগরিকের পিন বদলে দেন (ভুলে গেলে, ফোনে পরিচয় নিশ্চিত করার পর) */
+export async function setProblemPinHash(id: string, pinHash: string): Promise<boolean> {
+  const res = await db.execute({ sql: `UPDATE problems SET pin_hash = ? WHERE id = ?`, args: [pinHash, id] });
+  return res.rowsAffected > 0;
+}
+
+export async function insertProblem(problem: ProblemReport, consentAt = '', pinHash = ''): Promise<ProblemReport> {
   await db.execute({
     sql: `
       INSERT INTO problems (
-        id, tracking_code, submission_type, title, description, category, ward, specific_location, citizen_name, phone, is_anonymous, urgency, status, created_at, upvotes, timeline, assigned_officer, resolution_note, phone_hash, consent_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, tracking_code, submission_type, title, description, category, ward, specific_location, citizen_name, phone, is_anonymous, urgency, status, created_at, upvotes, timeline, assigned_officer, resolution_note, phone_hash, consent_at, pin_hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     args: [
       problem.id,
@@ -355,6 +405,7 @@ export async function insertProblem(problem: ProblemReport, consentAt = ''): Pro
       seal(problem.resolutionNote || ''),
       phoneBlindIndex(normalizeBdMobile(problem.phone) || ''),
       consentAt,
+      pinHash,
     ],
   });
   invalidateStatsCache();
@@ -503,6 +554,7 @@ async function runProblemMigrations() {
   const cols = await columnNames('problems');
   if (!cols.has('phone_hash')) await db.execute(`ALTER TABLE problems ADD COLUMN phone_hash TEXT NOT NULL DEFAULT ''`);
   if (!cols.has('consent_at')) await db.execute(`ALTER TABLE problems ADD COLUMN consent_at TEXT NOT NULL DEFAULT ''`);
+  if (!cols.has('pin_hash')) await db.execute(`ALTER TABLE problems ADD COLUMN pin_hash TEXT NOT NULL DEFAULT ''`);
   await db.execute(`CREATE INDEX IF NOT EXISTS idx_problems_phone_hash ON problems (phone_hash)`);
   await db.execute(`CREATE INDEX IF NOT EXISTS idx_problems_ward ON problems (ward)`);
   await db.execute(`CREATE INDEX IF NOT EXISTS idx_problems_created ON problems (created_at)`);
@@ -684,7 +736,9 @@ export async function countAudit(action: string, actor: string, sinceIso: string
 // ==========================================
 
 export async function exportBackup() {
-  const problems = await getAllProblems();
+  const pinRows = await db.execute(`SELECT id, pin_hash FROM problems`);
+  const pins = new Map(pinRows.rows.map((r) => [String(r.id), String(r.pin_hash || '')]));
+  const problems = (await getAllProblems()).map((p) => ({ ...p, pinHash: pins.get(p.id) || '' }));
   const manifesto = await getAllManifestoItems();
   const profile = await db.execute(`SELECT * FROM leader_profile`);
   const settings = await db.execute(`SELECT key, value, updated_at FROM site_settings WHERE key NOT LIKE 'totp%'`);
@@ -708,12 +762,15 @@ export async function exportBackup() {
 export async function restoreBackup(data: any): Promise<{ problems: number; manifesto: number; settings: number }> {
   if (!data || data.version !== 1 || !Array.isArray(data.problems)) throw new Error('ব্যাকআপ ফাইলটি সঠিক নয়।');
   let problems = 0;
-  for (const p of data.problems as ProblemReport[]) {
+  for (const p of data.problems as (ProblemReport & { pinHash?: string })[]) {
+    // পিন-হ্যাশ ব্যাকআপে থাকলে সেটি, নইলে ডেটাবেসে যা আছে সেটি রাখি (INSERT OR REPLACE যেন পিন না মোছে)
+    const existingPin = (await db.execute({ sql: `SELECT pin_hash FROM problems WHERE id = ?`, args: [p.id] })).rows[0]?.pin_hash;
+    const pinHash = typeof p.pinHash === 'string' && p.pinHash ? p.pinHash : String(existingPin || '');
     await db.execute({
       sql: `
         INSERT OR REPLACE INTO problems (
-          id, tracking_code, submission_type, title, description, category, ward, specific_location, citizen_name, phone, is_anonymous, urgency, status, created_at, upvotes, timeline, assigned_officer, resolution_note, phone_hash, consent_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          id, tracking_code, submission_type, title, description, category, ward, specific_location, citizen_name, phone, is_anonymous, urgency, status, created_at, upvotes, timeline, assigned_officer, resolution_note, phone_hash, consent_at, pin_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       args: [
         p.id,
@@ -736,6 +793,7 @@ export async function restoreBackup(data: any): Promise<{ problems: number; mani
         seal(p.resolutionNote || ''),
         phoneBlindIndex(normalizeBdMobile(p.phone) || ''),
         '',
+        pinHash,
       ],
     });
     problems++;

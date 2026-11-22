@@ -121,13 +121,13 @@ export const api = {
     return await res.json();
   },
 
-  // মোবাইল নম্বর দিয়ে অভিযোগের অবস্থা (কোড লাগে না)। না পেলে ফাঁকা তালিকা।
-  async track(phone: string): Promise<ProblemReport[]> {
+  // মোবাইল নম্বর + ৪ অঙ্কের পিন দিয়ে অভিযোগের অবস্থা। নম্বর বা পিন না মিললে ফাঁকা তালিকা।
+  async track(phone: string, pin: string): Promise<ProblemReport[]> {
     const res = await fetch('/api/track', {
       method: 'POST',
       credentials: 'same-origin',
       headers: jsonHeaders,
-      body: JSON.stringify({ phone }),
+      body: JSON.stringify({ phone, pin }),
     });
     if (res.status === 404) return [];
     await ensureOk(res, 'অনুসন্ধান করা যায়নি। আবার চেষ্টা করুন।');
@@ -141,7 +141,7 @@ export const api = {
     return await res.json();
   },
 
-  async createProblem(problem: ProblemReport & { consent: boolean }): Promise<ProblemReport> {
+  async createProblem(problem: ProblemReport & { consent: boolean; pin: string }): Promise<ProblemReport> {
     const res = await fetch('/api/problems', {
       method: 'POST',
       credentials: 'same-origin',
@@ -165,6 +165,17 @@ export const api = {
     });
     await ensureOk(res, 'সার্ভারে সমস্যা হয়েছে। আবার চেষ্টা করুন।');
     return await res.json();
+  },
+
+  // নাগরিক পিন ভুলে গেলে মালিক নতুন পিন বসান
+  async resetProblemPin(id: string, pin: string): Promise<void> {
+    const res = await fetch(`/api/problems/${encodeURIComponent(id)}/pin`, {
+      method: 'PATCH',
+      credentials: 'same-origin',
+      headers: jsonHeaders,
+      body: JSON.stringify({ pin }),
+    });
+    await ensureOk(res, 'পিন বদলানো যায়নি।');
   },
 
   async classifyProblem(id: string, category: string, urgency: string): Promise<ProblemReport> {

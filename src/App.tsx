@@ -184,7 +184,7 @@ export default function App() {
 
   // নতুন অভিযোগ/পরামর্শ: আগে সার্ভারে সংরক্ষণ, সফল হলে তবেই পর্দায় ও কোড দেখানো।
   // ব্যর্থ হলে ত্রুটি ছুঁড়ে দেওয়া হয়, ফর্ম সেটা দেখাবে।
-  const handleAddNewProblem = async (newProblem: ProblemReport & { consent: boolean }): Promise<ProblemReport> => {
+  const handleAddNewProblem = async (newProblem: ProblemReport & { consent: boolean; pin: string }): Promise<ProblemReport> => {
     const created = await api.createProblem(newProblem);
     loadStats();
     return created;

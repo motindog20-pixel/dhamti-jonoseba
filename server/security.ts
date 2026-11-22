@@ -269,4 +269,34 @@ export function phoneKey(value: string): string {
   return value.replace(/\D/g, '').slice(-10);
 }
 
+// ------------------------------------------------------------
+// নাগরিকের ৪ অঙ্কের পিন (অভিযোগের অবস্থা দেখার চাবি)
+// ------------------------------------------------------------
+const BN_DIGITS = '০১২৩৪৫৬৭৮৯';
+
+/** বাংলা/ইংরেজি অঙ্ক নিয়ে শুধু ইংরেজি অঙ্কের স্ট্রিং (স্পেস/চিহ্ন বাদ) */
+export function cleanPin(value: unknown): string {
+  if (typeof value !== 'string' && typeof value !== 'number') return '';
+  return String(value)
+    .replace(/[০-৯]/g, (d) => String(BN_DIGITS.indexOf(d)))
+    .replace(/\D/g, '')
+    .slice(0, 12);
+}
+
+export function isFourDigitPin(pin: string): boolean {
+  return /^\d{4}$/.test(pin);
+}
+
+/** ১১১১, ১২৩৪, ৪৩২১-এর মতো সহজে অনুমান করা পিন নেওয়া হয় না */
+export function isWeakPin(pin: string): boolean {
+  if (/^(\d)\1{3}$/.test(pin)) return true;
+  const d = pin.split('').map(Number);
+  const up = d.every((x, i) => i === 0 || x === d[i - 1] + 1);
+  const down = d.every((x, i) => i === 0 || x === d[i - 1] - 1);
+  return up || down || ['0000', '1212', '2580', '1122', '2000', '2001'].includes(pin);
+}
+
+export const hashPin = (pin: string): string => hashPassword(pin);
+export const verifyPin = (pin: string, stored: string | null): boolean => verifyPassword(pin, stored);
+
 export const ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;

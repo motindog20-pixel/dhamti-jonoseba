@@ -5,6 +5,7 @@ import { STATUS_LABEL_BN, STATUS_LABEL_EN } from '../data/statuses';
 import { X, Search, CheckCircle2, Clock, AlertCircle, MapPin, Calendar, ShieldCheck } from 'lucide-react';
 import { readContact } from '../services/myReports';
 import { api } from '../services/api';
+import { normalizePin, isFourDigitPin } from '../services/pin';
 
 interface TrackProblemModalProps {
   isOpen: boolean;
@@ -29,6 +30,7 @@ export const TrackProblemModal: React.FC<TrackProblemModalProps> = ({ isOpen, on
   const strings = UI_STRINGS[language];
   const bn = language === 'bn';
   const [phone, setPhone] = useState(() => readContact().phone);
+  const [pin, setPin] = useState('');
   const [searched, setSearched] = useState(false);
   const [results, setResults] = useState<ProblemReport[]>([]);
   const [selectedId, setSelectedId] = useState('');
@@ -51,11 +53,17 @@ export const TrackProblemModal: React.FC<TrackProblemModalProps> = ({ isOpen, on
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phone.trim() || loading) return;
+    if (!isFourDigitPin(pin)) {
+      setSearched(false);
+      setResults([]);
+      setSearchError(bn ? 'আপনার ৪ অঙ্কের পিন লিখুন।' : 'Enter your 4-digit PIN.');
+      return;
+    }
     setSearched(false);
     setSearchError('');
     setLoading(true);
     try {
-      const list = await api.track(phone.trim());
+      const list = await api.track(phone.trim(), pin);
       setResults(list);
       setSelectedId(list[0]?.id || '');
     } catch (err) {
@@ -111,29 +119,43 @@ export const TrackProblemModal: React.FC<TrackProblemModalProps> = ({ isOpen, on
         </div>
 
         <div className="p-4 sm:p-6 flex-1 overflow-y-auto">
-          <form onSubmit={handleSearch} className="flex gap-2">
+          <form onSubmit={handleSearch} className="space-y-3">
             <input
               type="tel"
               inputMode="numeric"
               autoComplete="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
+              aria-label={bn ? 'মোবাইল নম্বর' : 'Mobile number'}
               placeholder={bn ? 'মোবাইল নম্বর (০১৭XXXXXXXX)' : 'Mobile number (017XXXXXXXX)'}
-              className="flex-1 min-w-0 px-3 sm:px-4 py-3 text-base bg-neutral-50 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:bg-white"
+              className="w-full px-3 sm:px-4 py-3 text-base bg-neutral-50 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:bg-white"
             />
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-5 py-3 disabled:opacity-60 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-base rounded-xl transition-colors shrink-0 cursor-pointer"
-            >
-              {loading ? (bn ? 'খোঁজা হচ্ছে…' : 'Searching…') : strings.searchBtn}
-            </button>
+            <div className="flex gap-2">
+              <input
+                type="tel"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={4}
+                value={pin}
+                onChange={(e) => setPin(normalizePin(e.target.value))}
+                aria-label={bn ? '৪ অঙ্কের পিন' : '4-digit PIN'}
+                placeholder={bn ? 'আপনার ৪ অঙ্কের পিন' : 'Your 4-digit PIN'}
+                className="flex-1 min-w-0 px-3 sm:px-4 py-3 text-base tracking-widest bg-neutral-50 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:bg-white"
+              />
+              <button
+                type="submit"
+                disabled={loading}
+                className="px-5 py-3 disabled:opacity-60 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-base rounded-xl transition-colors shrink-0 cursor-pointer"
+              >
+                {loading ? (bn ? 'খোঁজা হচ্ছে…' : 'Searching…') : strings.searchBtn}
+              </button>
+            </div>
           </form>
 
           <p className="mt-2 text-sm text-neutral-600 leading-relaxed">
             {bn
-              ? 'অভিযোগ করার সময় যে মোবাইল নম্বর দিয়েছিলেন সেটি লিখুন। আর কিছু লাগবে না।'
-              : 'Enter the mobile number you used when reporting. Nothing else is needed.'}
+              ? 'অভিযোগ করার সময় যে মোবাইল নম্বর দিয়েছিলেন সেটি এবং নিজের বাছা ৪ অঙ্কের পিন লিখুন। পিন ভুলে গেলে অফিসে ফোন করুন।'
+              : 'Enter the mobile number you used and your own 4-digit PIN. If you forgot the PIN, call the office.'}
           </p>
           <p className="mt-2 flex items-start gap-1.5 text-xs text-neutral-500 leading-relaxed">
             <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" aria-hidden="true" />
@@ -154,10 +176,12 @@ export const TrackProblemModal: React.FC<TrackProblemModalProps> = ({ isOpen, on
             <div className="mt-6 p-6 text-center bg-neutral-50 rounded-2xl border border-neutral-200">
               <AlertCircle className="w-8 h-8 text-neutral-400 mx-auto mb-2" />
               <p className="text-base font-semibold text-neutral-800">
-                {bn ? 'এই নম্বরে কোনো অভিযোগ পাওয়া যায়নি।' : 'No report found for this number.'}
+                {bn ? 'নম্বর বা পিন মেলেনি।' : 'The number or PIN did not match.'}
               </p>
               <p className="text-sm text-neutral-500 mt-1">
-                {bn ? 'অভিযোগের সময় যে নম্বর দিয়েছিলেন ঠিক সেটি লিখুন।' : 'Use the exact number you reported with.'}
+                {bn
+                  ? 'অভিযোগের সময় যে নম্বর ও পিন দিয়েছিলেন ঠিক সেগুলো লিখুন। পিন ভুলে গেলে অফিসে ফোন করুন। একই নম্বরে অনেকবার ভুল হলে এক ঘণ্টা অপেক্ষা করতে হয়।'
+                  : 'Use the exact number and PIN you reported with. If you forgot the PIN, call the office. After many wrong tries you must wait an hour.'}
               </p>
             </div>
           )}

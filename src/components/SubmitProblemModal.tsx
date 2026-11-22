@@ -4,6 +4,7 @@ import { UI_STRINGS } from '../data/mockData';
 import { X, Check, Copy, MessageSquareText, ShieldCheck, CheckCircle2, Lightbulb, AlertTriangle, Lock, Smartphone } from 'lucide-react';
 import { sanitizeString } from '../services/security';
 import { normalizeBdMobile, formatBdMobile } from '../services/phone';
+import { normalizePin, isFourDigitPin, isWeakPin } from '../services/pin';
 import { readContact, rememberContact } from '../services/myReports';
 
 interface SubmitProblemModalProps {
@@ -12,7 +13,7 @@ interface SubmitProblemModalProps {
   language: Language;
   areas: AreaStat[];
   categories: CategoryStat[];
-  onSubmit: (problem: ProblemReport & { consent: boolean }) => Promise<ProblemReport>;
+  onSubmit: (problem: ProblemReport & { consent: boolean; pin: string }) => Promise<ProblemReport>;
   onOpenPrivacy: () => void;
 }
 
@@ -42,6 +43,8 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
   const isAnonymous = false; // বেনামী অপশন নেই: নাম, নম্বর ও ওয়ার্ড বাধ্যতামূলক
 
   const [consent, setConsent] = useState(false);
+  const [pin, setPin] = useState('');
+  const [submittedPin, setSubmittedPin] = useState('');
   const [submittedCode, setSubmittedCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -72,6 +75,16 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
     const cleanName = sanitizeString(citizenName, 60);
     const normalizedPhone = normalizeBdMobile(phone) || '';
     const cleanPhone = normalizedPhone;
+
+    const cleanPin = normalizePin(pin);
+    if (!isFourDigitPin(cleanPin)) {
+      setErrorMsg(language === 'bn' ? 'অবস্থা দেখার জন্য ৪ অঙ্কের একটি পিন বেছে নিন (যেমন ৭২৯৩)।' : 'Choose a 4-digit PIN to check your status later (e.g. 7293).');
+      return;
+    }
+    if (isWeakPin(cleanPin)) {
+      setErrorMsg(language === 'bn' ? 'এই পিনটি সহজেই অনুমান করা যায় (যেমন ১১১১, ১২৩৪)। অন্য ৪ অঙ্ক বেছে নিন।' : 'That PIN is too easy to guess (like 1111 or 1234). Choose another.');
+      return;
+    }
 
     if (cleanName.length < 2) {
       setErrorMsg(language === 'bn' ? 'আপনার নাম লিখুন।' : 'Please enter your name.');
@@ -170,8 +183,9 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
     setIsSubmitting(true);
     try {
       // সার্ভার আসল ট্র্যাকিং কোড তৈরি করে; সেটাই নাগরিককে দেখানো হয়
-      const created = await onSubmit({ ...newProblem, consent: true });
+      const created = await onSubmit({ ...newProblem, consent: true, pin: cleanPin });
       if (!isAnonymous) rememberContact(cleanName, formatBdMobile(normalizedPhone));
+      setSubmittedPin(cleanPin);
       setSubmittedCode(created.trackingCode);
     } catch (err) {
       setErrorMsg(
@@ -196,6 +210,8 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
 
   const handleResetAndClose = () => {
     setSubmittedCode(null);
+    setSubmittedPin('');
+    setPin('');
     setSubmissionType('complaint');
     const saved = readContact();
     setCitizenName(saved.name);
@@ -311,11 +327,19 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
               )}
             </div>
 
-            <p className="mt-4 text-sm text-neutral-600 max-w-sm mx-auto leading-relaxed">
-              {language === 'bn'
-                ? 'কোডটি এই ফোনে সংরক্ষিত হয়েছে। পরে "অবস্থা দেখুন" চাপলেই আপনার অভিযোগের অবস্থা দেখতে পাবেন, কোনো লগইন বা কোড মনে রাখার দরকার নেই।'
-                : 'This code is saved on this phone. Tap "Track" later to see progress, no login needed.'}
-            </p>
+            <div className="mt-4 p-4 bg-amber-50 rounded-2xl border border-amber-300 max-w-sm mx-auto">
+              <span className="text-xs text-amber-900 font-semibold block">
+                {language === 'bn' ? 'আপনার পিন (অবস্থা দেখতে লাগবে)' : 'Your PIN (needed to check status)'}
+              </span>
+              <span className="text-3xl font-extrabold text-neutral-900 font-mono-num tracking-[0.3em] block mt-1">
+                {submittedPin.split('').map((d) => Number(d).toLocaleString(language === 'bn' ? 'bn-BD' : 'en-US')).join('')}
+              </span>
+              <p className="mt-2 text-xs text-amber-900 leading-relaxed">
+                {language === 'bn'
+                  ? 'এখনই কাগজে লিখে রাখুন বা মনে রাখুন। পরে "অবস্থা দেখুন" চেপে মোবাইল নম্বর ও এই পিন দিলেই অবস্থা দেখতে পাবেন। পিন ভুলে গেলে অফিসে ফোন করুন।'
+                  : 'Write it down or remember it. Later tap "Track", enter your mobile number and this PIN. If you forget it, call the office.'}
+              </p>
+            </div>
 
             <div className="mt-8 flex justify-center gap-3">
               <button
@@ -550,14 +574,14 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
               </div>
             </div>
 
-            {/* যোগাযোগ: নম্বর দিলেই হবে, কোনো লগইন/OTP/কোড নেই */}
+            {/* যোগাযোগ: নম্বর + নিজের বাছা ৪ অঙ্কের পিন (লগইন/SMS কোড নেই) */}
             <div className="pt-3 border-t border-neutral-200/80 space-y-3">
               <div className="flex items-start gap-2.5 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950">
                 <Lock className="w-5 h-5 mt-0.5 shrink-0 text-emerald-700" aria-hidden="true" />
                 <p className="text-sm leading-relaxed">
                   {language === 'bn'
-                    ? 'নাম ও নম্বর শুধু অ্যাডমিন দেখবেন, ওয়েবসাইটে অন্য কেউ দেখতে পাবে না। পরে এই নম্বর দিয়েই অভিযোগের অবস্থা দেখতে পারবেন। কোনো লগইন বা OTP লাগবে না।'
-                    : 'Only the admin sees your name and number. You can later check progress with this number. No login or OTP.'}
+                    ? 'নাম ও নম্বর শুধু অ্যাডমিন দেখবেন, ওয়েবসাইটে অন্য কেউ দেখতে পাবে না। পরে এই নম্বর আর নিজের বাছা ৪ অঙ্কের পিন দিয়ে অভিযোগের অবস্থা দেখতে পারবেন। কোনো লগইন বা SMS কোড লাগবে না।'
+                    : 'Only the admin sees your name and number. You can later check progress with this number and your own 4-digit PIN. No login or SMS code.'}
                 </p>
               </div>
 
@@ -600,6 +624,30 @@ export const SubmitProblemModal: React.FC<SubmitProblemModalProps> = ({
                       placeholder={language === 'bn' ? 'আপনার নাম' : 'Your Name'}
                       className="w-full px-4 py-3 text-base bg-neutral-50 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:bg-white"
                     />
+                  </div>
+                  <div>
+                    <label htmlFor="report-pin" className="flex items-center gap-1.5 text-sm font-bold text-neutral-800 mb-1">
+                      <Lock className="w-4 h-4 text-emerald-700" aria-hidden="true" />
+                      {language === 'bn' ? 'নিজের একটি ৪ অঙ্কের পিন বেছে নিন' : 'Choose your own 4-digit PIN'}{' '}
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      id="report-pin"
+                      type="tel"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      maxLength={4}
+                      required
+                      value={pin}
+                      onChange={(e) => setPin(normalizePin(e.target.value))}
+                      placeholder={language === 'bn' ? '৪টি সংখ্যা' : '4 digits'}
+                      className="w-40 px-4 py-3 text-xl tracking-[0.3em] text-center bg-neutral-50 border-2 border-neutral-300 rounded-xl focus:outline-none focus:border-emerald-600 focus:bg-white"
+                    />
+                    <p className="text-xs text-neutral-500 mt-1 leading-relaxed">
+                      {language === 'bn'
+                        ? 'পরে "অবস্থা দেখুন"-এ মোবাইল নম্বরের সাথে এই পিন দিতে হবে, যাতে অন্য কেউ আপনার অভিযোগের অবস্থা দেখতে না পারে। মনে রাখুন বা লিখে রাখুন। ১১১১ বা ১২৩৪-এর মতো সহজ সংখ্যা নেওয়া হবে না।'
+                        : 'You will enter this PIN with your number in "Track", so nobody else can see your report status. Remember it or write it down. Easy ones like 1111 or 1234 are not accepted.'}
+                    </p>
                   </div>
                 </div>
               )}
