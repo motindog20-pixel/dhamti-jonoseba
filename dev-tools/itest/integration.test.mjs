@@ -58,7 +58,7 @@ const sessCookie = (r) => 'dhamti_admin=' + encodeURIComponent(r.cookies.dhamti_
 const login = async (extra = {}, ip) => call('POST', '/api/admin/login', { body: { password: 'correct horse battery', ...extra }, ip });
 
 let cid = 'x', oid = 'x', sid_ = 'x';
-const good = { submissionType: 'complaint', title: 'রাস্তা ভাঙা', description: 'বড় গর্ত', category: 'road', ward: 'ward-03', specificLocation: 'বাজার মোড়', citizenName: 'রহিম উদ্দিন', phone: '০১৭১২-৩৪৫৬৭৮', isAnonymous: false, urgency: 'high', consent: true, pin: '4827' };
+const good = { submissionType: 'complaint', title: 'রাস্তা ভাঙা', description: 'বড় গর্ত', category: 'road', ward: 'ward-03', specificLocation: 'বাজার মোড়', citizenName: 'রহিম উদ্দিন', phone: '০১৭১২-৩৪৫৬৭৮', isAnonymous: false, urgency: 'high', consent: true };
 
 // =============== 1. জমা দেওয়া ===============
 let r = await call('POST', '/api/problems', { body: { ...good, consent: false } });
@@ -87,11 +87,12 @@ ok('bad ward -> 400', r.status === 400);
 r = await call('POST', '/api/problems', { body: { ...good, title: 'দ্বিতীয় অভিযোগ', phone: '+880 1712 345678' } });
 ok('second report, +880 phone form -> 201', r.status === 201, JSON.stringify(r.json));
 const second = r.json;
-r = await call('POST', '/api/problems', { body: { ...good, title: 'অন্যজন', citizenName: 'করিম', phone: '01911111111', pin: '9358' } });
+r = await call('POST', '/api/problems', { body: { ...good, title: 'অন্যজন', citizenName: 'করিম', phone: '01911111111' } });
 ok('other person report -> 201', r.status === 201);
 const other = r.json;
 r = await call('POST', '/api/problems', { body: { ...good, title: '<script>x</script>' + 'a'.repeat(300), phone: '01712345678' } });
 ok('T10 input stripped of tags & capped', r.status === 201 && r.json.title === '' /* hidden in track view */);
+const t10 = r.json;
 r = await call('POST', '/api/problems', { body: good, origin: 'https://evil.example' });
 ok('T11 cross-site POST rejected (403 CSRF)', r.status === 403);
 
@@ -101,88 +102,77 @@ ok('T02 public complaint list is gone (404)', r.status === 404, String(r.status)
 r = await call('POST', `/api/problems/${cid}/upvote`, { body: {} });
 ok('upvote endpoint is gone (404)', r.status === 404, String(r.status));
 
-// =============== 3. মোবাইল নম্বর + ৪ অঙ্কের পিনে অবস্থা দেখা ===============
-r = await call('POST', '/api/track', { body: { phone: '০১৭১২৩৪৫৬৭৮', pin: '৪৮২৭' } });
-ok('T03 track by Bangla-digit phone + Bangla-digit PIN finds that number\'s reports (3)', r.status === 200 && r.json.length === 3 && [created.trackingCode, second.trackingCode].every((c) => r.json.some((p) => p.trackingCode === c)), JSON.stringify(r.json?.map((p) => p.trackingCode)));
+// =============== 3. মোবাইল নম্বর + রেফারেন্স কোডে অবস্থা দেখা ===============
+const toBn = (str) => str.replace(/\d/g, (d) => '০১২৩৪৫৬৭৮৯'[d]);
+r = await call('POST', '/api/track', { body: { phone: '০১৭১২৩৪৫৬৭৮', code: toBn(created.trackingCode) } });
+ok('T03 track by Bangla-digit phone + Bangla-digit code finds exactly that report', r.status === 200 && r.json.length === 1 && r.json[0].trackingCode === created.trackingCode, JSON.stringify(r.json?.map((p) => p.trackingCode)));
 const trackText = JSON.stringify(r.json);
 ok('tracked data has NO phone / name / title / text / location', r.json.every((p) => p.phone === '' && p.citizenName === 'এলাকাবাসী' && p.title === '' && p.description === '' && p.specificLocation === '') && !trackText.includes('রহিম') && !trackText.includes('বাজার মোড়') && !trackText.includes('01712345678'));
 ok('tracked data shows status + timeline + category + ward', r.json.every((p) => typeof p.status === 'string' && p.timeline.length >= 1 && p.category === 'road' && p.ward === 'ward-03'));
 ok('tracking does not leak another person\'s report', !r.json.some((p) => p.trackingCode === other.trackingCode));
-r = await call('POST', '/api/track', { body: { phone: '+8801712345678', pin: '4827' } });
-ok('track by +880 form works', r.status === 200 && r.json.length === 3);
-r = await call('POST', '/api/track', { body: { phone: '01800000000', pin: '4827' } });
+r = await call('POST', '/api/track', { body: { phone: '+8801712345678', code: second.trackingCode } });
+ok('track by +880 form works (second report)', r.status === 200 && r.json.length === 1 && r.json[0].trackingCode === second.trackingCode);
+r = await call('POST', '/api/track', { body: { phone: '01800000000', code: created.trackingCode } });
 ok('unknown phone -> 404', r.status === 404);
-r = await call('POST', '/api/track', { body: { phone: '' } });
+r = await call('POST', '/api/track', { body: { phone: '', code: created.trackingCode } });
 ok('empty phone -> 400', r.status === 400);
 r = await call('POST', '/api/track', { body: { code: created.trackingCode } });
 ok('tracking code alone shows nothing (400)', r.status === 400);
-r = await call('POST', '/api/track', { body: { phone: 'abc' } });
+r = await call('POST', '/api/track', { body: { phone: 'abc', code: created.trackingCode } });
 ok('garbage phone -> 400', r.status === 400);
 // ভুল নম্বর অনুমান আটকানো (এক IP থেকে ৮টি ব্যর্থ চেষ্টার পর বন্ধ)
 let last;
-for (let i = 0; i < 9; i++) last = await call('POST', '/api/track', { body: { phone: '0180000' + String(1000 + i), pin: '4827' }, ip: '77.7.7.7' });
+for (let i = 0; i < 9; i++) last = await call('POST', '/api/track', { body: { phone: '0180000' + String(1000 + i), code: created.trackingCode }, ip: '77.7.7.7' });
 ok('T07 too many wrong lookups from one IP -> 429', last.status === 429, String(last.status));
-r = await call('POST', '/api/track', { body: { phone: '01712345678', pin: '4827' }, ip: '77.7.7.7' });
+r = await call('POST', '/api/track', { body: { phone: '01712345678', code: created.trackingCode }, ip: '77.7.7.7' });
 ok('blocked IP cannot look up even a valid number meanwhile', r.status === 429);
 
-// ---- ৪ অঙ্কের পিন (নম্বর জানলেই অন্যের অভিযোগ দেখা যাবে না) ----
+// ---- রেফারেন্স কোড (নম্বর জানলেই অন্যের অভিযোগ দেখা যাবে না) ----
 r = await call('POST', '/api/track', { body: { phone: '01712345678' } });
-ok('P01 phone alone shows nothing (400)', r.status === 400 && /পিন/.test(r.json?.error || ''), JSON.stringify(r.json));
-r = await call('POST', '/api/track', { body: { phone: '01712345678', pin: '12' } });
-ok('P02 short PIN -> 400', r.status === 400);
-r = await call('POST', '/api/track', { body: { phone: '01712345678', pin: 'abcd' } });
-ok('non-digit PIN -> 400', r.status === 400);
-const wrongPin = await call('POST', '/api/track', { body: { phone: '01712345678', pin: '1357' }, ip: '60.0.0.1' });
-const unknownPhone = await call('POST', '/api/track', { body: { phone: '01555555555', pin: '1357' }, ip: '60.0.0.2' });
-ok('P03 right number + wrong PIN -> 404 not_found, shows nothing', wrongPin.status === 404 && wrongPin.json?.error === 'not_found' && !JSON.stringify(wrongPin.json).includes('JNS'), JSON.stringify(wrongPin.json));
-ok('P04 wrong-PIN reply is identical to unknown-number reply (cannot tell if a number has complaints)', JSON.stringify(wrongPin.json) === JSON.stringify(unknownPhone.json) && wrongPin.status === unknownPhone.status);
-r = await call('POST', '/api/track', { body: { phone: '01911111111', pin: '4827' }, ip: '60.0.0.3' });
-ok('P05 another person\'s PIN does not open this number\'s reports', r.status === 404);
-r = await call('POST', '/api/track', { body: { phone: '01911111111', pin: '9358' }, ip: '60.0.0.4' });
-ok('P06 correct number + correct PIN shows only that person\'s report', r.status === 200 && r.json.length === 1 && r.json[0].trackingCode === other.trackingCode);
-
-// পিন বাছাইয়ের নিয়ম (জমার সময়)
-for (const [label, pin] of [['missing', undefined], ['3 digits', '123'], ['5 digits', '48271'], ['letters', 'abcd'], ['1111', '1111'], ['1234', '1234'], ['4321', '4321'], ['0000', '0000']]) {
-  r = await call('POST', '/api/problems', { body: { ...good, phone: '01766600000', pin } });
-  ok(`P07 submit with PIN ${label} -> 400`, r.status === 400 && /পিন/.test(r.json?.error || ''), JSON.stringify(r.json));
-}
-r = await call('POST', '/api/problems', { body: { ...good, phone: '01766600001', pin: '৭২৯৩' } });
-ok('P08 Bangla-digit PIN accepted at submit', r.status === 201);
-r = await call('POST', '/api/track', { body: { phone: '01766600001', pin: '7293' }, ip: '60.0.0.5' });
-ok('Bangla-digit PIN works as English digits when tracking', r.status === 200 && r.json.length === 1);
-
-// পিন কখনো পাঠানো/রাখা হয় না
-const pinRows = (await db.execute(`SELECT pin_hash FROM problems ORDER BY created_at DESC LIMIT 5`)).rows;
-ok('P09 PIN stored only as salted scrypt hash (never plain)', pinRows.length > 0 && pinRows.every((x) => /^scrypt\$/.test(String(x.pin_hash)) && !String(x.pin_hash).includes('4827') && !String(x.pin_hash).includes('9358')));
-ok('PIN absent from track view and stats', !/pin|4827|9358|scrypt/i.test(JSON.stringify((await call('POST', '/api/track', { body: { phone: '01911111111', pin: '9358' }, ip: '60.0.0.6' })).json)) && !/pin|scrypt/i.test(JSON.stringify((await call('GET', '/api/stats')).json)));
+ok('P01 phone alone shows nothing (400)', r.status === 400 && /কোড/.test(r.json?.error || ''), JSON.stringify(r.json));
+r = await call('POST', '/api/track', { body: { phone: '01712345678', code: 'abc' } });
+ok('P02 code without digits -> 400', r.status === 400);
+r = await call('POST', '/api/track', { body: { phone: '01712345678', code: '12' } });
+ok('too-short code -> 400', r.status === 400);
+const wrongCode = await call('POST', '/api/track', { body: { phone: '01712345678', code: 'JNS-2026-000001' }, ip: '60.0.0.1' });
+const unknownPhone = await call('POST', '/api/track', { body: { phone: '01555555555', code: 'JNS-2026-000001' }, ip: '60.0.0.2' });
+ok('P03 right number + wrong code -> 404 not_found, shows nothing', wrongCode.status === 404 && wrongCode.json?.error === 'not_found' && !JSON.stringify(wrongCode.json).includes('JNS'), JSON.stringify(wrongCode.json));
+ok('P04 wrong-code reply is identical to unknown-number reply (cannot tell if a number has complaints)', JSON.stringify(wrongCode.json) === JSON.stringify(unknownPhone.json) && wrongCode.status === unknownPhone.status);
+r = await call('POST', '/api/track', { body: { phone: '01911111111', code: created.trackingCode }, ip: '60.0.0.3' });
+ok('P05 another person\'s code does not open this number\'s report', r.status === 404);
+r = await call('POST', '/api/track', { body: { phone: '01911111111', code: other.trackingCode }, ip: '60.0.0.4' });
+ok('P06 correct number + correct code shows only that person\'s report', r.status === 200 && r.json.length === 1 && r.json[0].trackingCode === other.trackingCode);
+const lastPart = (c) => c.split('-').pop();
+r = await call('POST', '/api/track', { body: { phone: '01712345678', code: lastPart(t10.trackingCode) }, ip: '60.0.0.5' });
+ok('P07 typing only the final number of the code also works', r.status === 200 && r.json.length === 1 && r.json[0].trackingCode === t10.trackingCode, JSON.stringify(r.json));
+r = await call('POST', '/api/track', { body: { phone: '01712345678', code: ' ' + created.trackingCode.toLowerCase() + ' ' }, ip: '60.0.0.6' });
+ok('lower-case code with spaces works', r.status === 200 && r.json.length === 1);
+ok('P08 new codes are 6 random digits and distinct', [created, second, other, t10].every((x) => /^(JNS)-\d{4}-\d{6}$/.test(x.trackingCode)) && new Set([created, second, other, t10].map((x) => x.trackingCode)).size === 4, [created, second, other, t10].map((x) => x.trackingCode).join(' '));
+ok('code is not in stats', !/JNS-/.test(JSON.stringify((await call('GET', '/api/stats')).json)));
 
 // অনুমান ঠেকানো: প্রতি নম্বরে ঘণ্টায় ৫ বার যাচাই
 const target = '01822222222';
-r = await call('POST', '/api/problems', { body: { ...good, phone: target, pin: '5039' } });
-ok('setup: target number has a complaint', r.status === 201);
+r = await call('POST', '/api/problems', { body: { ...good, phone: target } });
+const targetCode = r.json?.trackingCode;
+ok('setup: target number has a complaint', r.status === 201 && !!targetCode);
 let results = [];
-for (let i = 0; i < 6; i++) results.push((await call('POST', '/api/track', { body: { phone: target, pin: String(6000 + i * 7) }, ip: `61.0.0.${i + 1}` })).status);
+for (let i = 0; i < 6; i++) results.push((await call('POST', '/api/track', { body: { phone: target, code: 'JNS-2026-' + String(100000 + i * 7919) }, ip: `61.0.0.${i + 1}` })).status);
 ok('P10 first 5 wrong guesses -> 404, 6th -> 429 (locked)', results.slice(0, 5).every((x) => x === 404) && results[5] === 429, JSON.stringify(results));
-r = await call('POST', '/api/track', { body: { phone: target, pin: '5039' }, ip: '61.0.0.50' });
-ok('P11 even the CORRECT PIN is refused while locked (from a fresh IP)', r.status === 429 && !!r.headers['Retry-After'], JSON.stringify(r.json));
-r = await call('POST', '/api/track', { body: { phone: '01912345670', pin: '5039' }, ip: '61.0.0.51' });
+r = await call('POST', '/api/track', { body: { phone: target, code: targetCode }, ip: '61.0.0.50' });
+ok('P11 even the CORRECT code is refused while locked (from a fresh IP)', r.status === 429 && !!r.headers['Retry-After'], JSON.stringify(r.json));
+r = await call('POST', '/api/track', { body: { phone: '01912345670', code: targetCode }, ip: '61.0.0.51' });
 ok('lock is per number: another number is not affected', r.status === 404);
-// ১টি ঘণ্টা পার হলে আবার চেষ্টা চলে
 await db.execute(`UPDATE track_attempts SET window_start = window_start - 3700000`);
-r = await call('POST', '/api/track', { body: { phone: target, pin: '5039' }, ip: '61.0.0.52' });
-ok('P12 after the window passes the correct PIN works again, and success clears the counter', r.status === 200 && r.json.length === 1, JSON.stringify(r.json));
+r = await call('POST', '/api/track', { body: { phone: target, code: targetCode }, ip: '61.0.0.52' });
+ok('P12 after the window passes the correct code works again', r.status === 200 && r.json.length === 1, JSON.stringify(r.json));
 const cry = await import('./server/crypto.ts');
 ok('counter row for the target removed after success', (await db.execute({ sql: `SELECT 1 FROM track_attempts WHERE key = ?`, args: [cry.phoneBlindIndex('01822222222')] })).rows.length === 0);
-// একসাথে অনেক অনুরোধ
 const target2 = '01833333333';
-await call('POST', '/api/problems', { body: { ...good, phone: target2, pin: '5039' } });
-const burst = await Promise.all(Array.from({ length: 20 }, (_, i) => call('POST', '/api/track', { body: { phone: target2, pin: String(7000 + i * 11) }, ip: `62.0.1.${i + 1}` })));
-const verified = burst.filter((x) => x.status === 404).length;
-ok('P13 20 parallel guesses: at most 5 are even checked, the rest are refused', verified <= 5 && burst.filter((x) => x.status === 429).length >= 15, JSON.stringify(burst.map((x) => x.status)));
-
-// মালিক পিন বদলে দেন (ভুলে গেলে) — লগইন ছাড়া নয়
+await call('POST', '/api/problems', { body: { ...good, phone: target2 } });
+const burst = await Promise.all(Array.from({ length: 20 }, (_, i) => call('POST', '/api/track', { body: { phone: target2, code: 'JNS-2026-' + String(200000 + i * 11) }, ip: `62.0.1.${i + 1}` })));
+ok('P13 20 parallel guesses: at most 5 are even checked, the rest are refused', burst.filter((x) => x.status === 404).length <= 5 && burst.filter((x) => x.status === 429).length >= 15, JSON.stringify(burst.map((x) => x.status)));
 r = await call('PATCH', `/api/problems/${cid}/pin`, { body: { pin: '8642' } });
-ok('P14 PIN reset requires owner login (401)', r.status === 401);
+ok('the old PIN-reset endpoint no longer exists', r.status === 404, String(r.status));
 
 // =============== 4. পাবলিক পরিসংখ্যান (সব সংখ্যা সত্যিকারের, ০ সহ) ===============
 dbm.invalidateStatsCache();
@@ -273,33 +263,16 @@ for (const bad of ['hacked', 'resolved', 'pending', 'in_progress']) {
   r = await call('PATCH', `/api/problems/${cid}`, { cookie, body: { status: bad } });
   ok(`old/invalid status "${bad}" -> 400`, r.status === 400);
 }
-r = await call('POST', '/api/track', { body: { phone: '01712345678', pin: '4827' } });
+r = await call('POST', '/api/track', { body: { phone: '01712345678', code: created.trackingCode } });
 const tv = r.json.find((p) => p.trackingCode === created.trackingCode);
 ok('citizen sees new status + note, staff name hidden', tv.status === 'contacted' && tv.timeline.at(-1).noteBn.includes('ফোনে কথা') && tv.timeline.every((e) => e.author === 'জনসেবা সেল'));
 r = await call('PATCH', `/api/problems/${cid}/classify`, { cookie, body: { category: 'lighting', urgency: 'critical' } });
 ok('classify ok', r.status === 200 && r.json.category === 'lighting' && r.json.urgency === 'critical', JSON.stringify(r.json));
 r = await call('PATCH', `/api/problems/${cid}/classify`, { cookie, body: { category: 'nonsense' } });
 ok('classify bad category -> 400', r.status === 400);
-// ---- মালিক কর্তৃক পিন বদল ----
-r = await call('PATCH', `/api/problems/${cid}/pin`, { cookie, body: { pin: '1111' } });
-ok('P15 owner cannot set a weak PIN (400)', r.status === 400);
-r = await call('PATCH', `/api/problems/${cid}/pin`, { cookie, body: { pin: '86' } });
-ok('owner cannot set a short PIN (400)', r.status === 400);
-r = await call('PATCH', `/api/problems/not-a-real-id/pin`, { cookie, body: { pin: '8642' } });
-ok('unknown report -> 404', r.status === 404);
-r = await call('PATCH', `/api/problems/${cid}/pin`, { cookie, body: { pin: '৮৬৪২' } });
-ok('P16 owner resets PIN (Bangla digits ok) -> 200', r.status === 200 && r.json.ok === true);
-r = await call('POST', '/api/track', { body: { phone: '01712345678', pin: '8642' }, ip: '63.0.0.1' });
-ok('new PIN opens exactly that one report', r.status === 200 && r.json.length === 1 && r.json[0].trackingCode === created.trackingCode, JSON.stringify(r.json?.map((p) => p.trackingCode)));
-r = await call('POST', '/api/track', { body: { phone: '01712345678', pin: '4827' }, ip: '63.0.0.2' });
-ok('old PIN no longer opens the reset report (others on the same number still use it)', r.status === 200 && !r.json.some((p) => p.trackingCode === created.trackingCode) && r.json.length >= 2);
-const auditPin = (await call('GET', '/api/admin/audit', { cookie })).json.filter((e) => e.action === 'pin_reset');
-ok('P17 PIN reset is audited without the PIN itself', auditPin.length === 1 && auditPin[0].target === cid && !JSON.stringify(auditPin).match(/8642|৮৬৪২|1111/));
-r = await call('PATCH', `/api/problems/${cid}/pin`, { cookie, body: { pin: '4827' } });
-ok('owner sets it back to 4827 for the rest of the tests', r.status === 200);
 r = await call('PATCH', `/api/problems/x'%20OR%201=1`, { cookie, body: { status: 'under_review' } });
 ok('T08 weird id (SQL-injection style) rejected (400)', r.status === 400);
-r = await call('POST', '/api/track', { body: { phone: "01712345678' OR '1'='1", pin: '4827' } });
+r = await call('POST', '/api/track', { body: { phone: "01712345678' OR '1'='1", code: created.trackingCode } });
 ok('SQL-injection style phone -> 400', r.status === 400 || r.status === 404);
 r = await call('POST', '/api/problems', { body: { ...good, title: "'; DROP TABLE problems;--", phone: '01712345678' } });
 ok('SQLi text stored as plain text, table intact', r.status === 201 && (await call('GET', '/api/admin/problems', { cookie })).json.some((p) => p.title.includes('DROP TABLE')));
@@ -376,13 +349,8 @@ ok('admin DELETE ok', r.status === 200 && r.json.success === true);
 r = await dbm.restoreBackup(bk);
 const afterRestore = (await call('GET', '/api/admin/problems', { cookie })).json;
 ok('restore brings the deleted report back (no duplicates)', r.problems >= 1 && afterRestore.filter((p) => p.id === oid).length === 1 && afterRestore.length === bk.problems.length, `${afterRestore.length} vs ${bk.problems.length}`);
-r = await call('POST', '/api/track', { body: { phone: '01911111111', pin: '9358' }, ip: '64.0.0.1' });
-ok('P18 PIN survives delete + restore from backup (hash is in the backup)', r.status === 200 && r.json.length === 1, JSON.stringify(r.json));
-ok('backup holds only the PIN hash, never a plain PIN', bk.problems.every((p) => !p.pinHash || /^scrypt\$/.test(p.pinHash)) && bk.problems.some((p) => /^scrypt\$/.test(p.pinHash)));
-const bkNoPin = JSON.parse(JSON.stringify(bk)); for (const p of bkNoPin.problems) delete p.pinHash;
-await dbm.restoreBackup(bkNoPin);
-r = await call('POST', '/api/track', { body: { phone: '01911111111', pin: '9358' }, ip: '64.0.0.2' });
-ok('restoring an old backup without PIN data does not wipe existing PINs', r.status === 200 && r.json.length === 1);
+r = await call('POST', '/api/track', { body: { phone: '01911111111', code: other.trackingCode }, ip: '64.0.0.1' });
+ok('P18 after delete + restore from backup the same code still opens the report', r.status === 200 && r.json.length === 1 && r.json[0].trackingCode === other.trackingCode, JSON.stringify(r.json));
 const actions2 = new Set((await call('GET', '/api/admin/audit', { cookie })).json.map((e) => e.action));
 ok('backup/export/delete are in the audit log', ['backup_download', 'export_csv', 'delete_problem'].every((a) => actions2.has(a)));
 
@@ -401,7 +369,7 @@ ok('phone index upgraded to keyed HMAC (differs from old weak hash)', raw.phone_
 r = await call('GET', '/api/admin/problems', { cookie });
 const dec = r.json.find((p) => p.id === cid);
 ok('admin still reads decrypted data', dec?.phone === '01712345678' && dec?.citizenName === 'রহিম উদ্দিন' && dec?.description === 'বড় গর্ত');
-r = await call('POST', '/api/track', { body: { phone: '01712345678', pin: '4827' } });
+r = await call('POST', '/api/track', { body: { phone: '01712345678', code: created.trackingCode } });
 ok('phone lookup still works through the blind index', r.status === 200 && r.json.some((p) => p.trackingCode === created.trackingCode));
 r = await call('POST', '/api/problems', { body: { ...good, title: 'এনক্রিপ্টেড নতুন', phone: '01733333333', citizenName: 'সালমা' } });
 raw = (await db.execute(`SELECT phone, citizen_name, title FROM problems ORDER BY created_at DESC LIMIT 1`)).rows[0];

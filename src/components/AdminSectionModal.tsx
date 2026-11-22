@@ -13,7 +13,6 @@ import {
 } from '../types';
 import { MANIFESTO_CATEGORIES_CONFIG, INITIAL_MANIFESTO_ITEMS } from '../data/manifestoData';
 import { LEADER_PERMANENT_PHOTO_URL, INITIAL_AREAS } from '../data/mockData';
-import { normalizePin, isFourDigitPin, isWeakPin } from '../services/pin';
 import { 
   X, 
   CheckCircle2, 
@@ -70,67 +69,6 @@ interface AdminSectionModalProps {
   onDeleteCompletedManifestos?: () => void;
   onResetManifesto: () => void;
 }
-
-/** নাগরিক পিন ভুলে গেলে (ফোনে পরিচয় নিশ্চিত করার পর) মালিক নতুন ৪ অঙ্কের পিন বসান */
-const PinReset: React.FC<{ problemId: string; language: string }> = ({ problemId, language }) => {
-  const bn = language === 'bn';
-  const [open, setOpen] = useState(false);
-  const [pin, setPin] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-
-  const save = async () => {
-    if (!isFourDigitPin(pin)) return setMsg({ ok: false, text: bn ? '৪ অঙ্কের সংখ্যা দিন।' : 'Enter 4 digits.' });
-    if (isWeakPin(pin)) return setMsg({ ok: false, text: bn ? 'সহজ পিন (১১১১, ১২৩৪) চলবে না।' : 'Easy PINs are not allowed.' });
-    setBusy(true);
-    setMsg(null);
-    try {
-      await api.resetProblemPin(problemId, pin);
-      setMsg({ ok: true, text: bn ? `নতুন পিন বসেছে: ${pin}। নাগরিককে ফোনে জানিয়ে দিন।` : `New PIN set: ${pin}. Tell the citizen by phone.` });
-      setPin('');
-    } catch (err) {
-      setMsg({ ok: false, text: err instanceof Error && err.message ? err.message : bn ? 'বদলানো যায়নি।' : 'Could not change.' });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="text-xs">
-      {!open ? (
-        <button type="button" onClick={() => setOpen(true)} className="font-semibold text-emerald-800 underline underline-offset-2 cursor-pointer">
-          {bn ? 'নাগরিক পিন ভুলে গেছেন? নতুন পিন বসান' : 'Citizen forgot the PIN? Set a new one'}
-        </button>
-      ) : (
-        <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 space-y-2">
-          <p className="text-amber-900 leading-relaxed">
-            {bn
-              ? 'আগে ফোনে নিশ্চিত হোন যে ইনি আসল অভিযোগকারী (নাম, কী নিয়ে অভিযোগ), তারপর নতুন ৪ অঙ্কের পিন বসান। এই নম্বরের শুধু এই অভিযোগের পিন বদলাবে।'
-              : 'First confirm by phone this is the real complainant, then set a new 4-digit PIN. Only this report\'s PIN changes.'}
-          </p>
-          <div className="flex gap-2">
-            <input
-              type="tel"
-              inputMode="numeric"
-              maxLength={4}
-              value={pin}
-              onChange={(e) => setPin(normalizePin(e.target.value))}
-              placeholder={bn ? 'নতুন ৪ অঙ্ক' : 'New 4 digits'}
-              className="w-32 px-3 py-2 text-base tracking-widest text-center bg-white border border-neutral-300 rounded-lg"
-            />
-            <button type="button" onClick={save} disabled={busy} className="px-3 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white font-bold rounded-lg cursor-pointer">
-              {busy ? '…' : bn ? 'বসান' : 'Set'}
-            </button>
-            <button type="button" onClick={() => { setOpen(false); setMsg(null); setPin(''); }} className="px-3 py-2 bg-neutral-200 hover:bg-neutral-300 text-neutral-800 font-medium rounded-lg cursor-pointer">
-              {bn ? 'বন্ধ' : 'Close'}
-            </button>
-          </div>
-          {msg && <p role="status" className={`font-semibold ${msg.ok ? 'text-emerald-800' : 'text-red-700'}`}>{msg.text}</p>}
-        </div>
-      )}
-    </div>
-  );
-};
 
 export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
   isOpen,
@@ -1127,7 +1065,11 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                         </div>
                       </div>
 
-                      <PinReset key={currentProblem.id} problemId={currentProblem.id} language={language} />
+                      <p className="text-[11px] text-neutral-500 leading-relaxed">
+                        {language === 'bn'
+                          ? `নাগরিক রেফারেন্স কোড (${currentProblem.trackingCode}) হারালে ফোনে পরিচয় নিশ্চিত করে (নাম, কী নিয়ে অভিযোগ) কোডটি তাঁকে জানান।`
+                          : `If the citizen loses the reference code (${currentProblem.trackingCode}), confirm identity by phone and tell it to them.`}
+                      </p>
 
                       {/* Full description */}
                       <div>

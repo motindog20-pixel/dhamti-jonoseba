@@ -270,33 +270,27 @@ export function phoneKey(value: string): string {
 }
 
 // ------------------------------------------------------------
-// নাগরিকের ৪ অঙ্কের পিন (অভিযোগের অবস্থা দেখার চাবি)
+// রেফারেন্স কোড (যেমন JNS-2026-483627): অবস্থা দেখতে মোবাইল নম্বরের সাথে এটিও লাগে
 // ------------------------------------------------------------
 const BN_DIGITS = '০১২৩৪৫৬৭৮৯';
 
-/** বাংলা/ইংরেজি অঙ্ক নিয়ে শুধু ইংরেজি অঙ্কের স্ট্রিং (স্পেস/চিহ্ন বাদ) */
-export function cleanPin(value: unknown): string {
-  if (typeof value !== 'string' && typeof value !== 'number') return '';
-  return String(value)
-    .replace(/[০-৯]/g, (d) => String(BN_DIGITS.indexOf(d)))
-    .replace(/\D/g, '')
-    .slice(0, 12);
+/** পুরো কোড (JNS-2026-483627) বা শুধু শেষের সংখ্যা (483627), বাংলা বা ইংরেজি অঙ্কে; শেষের সংখ্যা-গুচ্ছটি নেওয়া হয় */
+export function cleanTrackCode(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const ascii = value.replace(/[০-৯]/g, (d) => String(BN_DIGITS.indexOf(d)));
+  const groups = ascii.match(/\d+/g);
+  return groups ? groups[groups.length - 1].slice(0, 12) : '';
 }
 
-export function isFourDigitPin(pin: string): boolean {
-  return /^\d{4}$/.test(pin);
+export function isValidTrackCode(code: string): boolean {
+  return /^\d{4,8}$/.test(code);
 }
 
-/** ১১১১, ১২৩৪, ৪৩২১-এর মতো সহজে অনুমান করা পিন নেওয়া হয় না */
-export function isWeakPin(pin: string): boolean {
-  if (/^(\d)\1{3}$/.test(pin)) return true;
-  const d = pin.split('').map(Number);
-  const up = d.every((x, i) => i === 0 || x === d[i - 1] + 1);
-  const down = d.every((x, i) => i === 0 || x === d[i - 1] - 1);
-  return up || down || ['0000', '1212', '2580', '1122', '2000', '2001'].includes(pin);
+/** দেওয়া সংখ্যা সংরক্ষিত কোডের শেষ অংশের সাথে মেলে কিনা (সমান সময়ে তুলনা) */
+export function trackCodeMatches(inputDigits: string, storedTrackingCode: string): boolean {
+  const stored = String(storedTrackingCode).split('-').pop() || '';
+  if (stored.length !== inputDigits.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(stored), Buffer.from(inputDigits));
 }
-
-export const hashPin = (pin: string): string => hashPassword(pin);
-export const verifyPin = (pin: string, stored: string | null): boolean => verifyPassword(pin, stored);
 
 export const ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;

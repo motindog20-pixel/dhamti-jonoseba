@@ -8,10 +8,9 @@ import crypto from 'node:crypto';
 import {
   initDatabase,
   getAllProblems,
-  findProblemsByPhoneAndPin,
-  consumePinAttempt,
-  clearPinAttempts,
-  setProblemPinHash,
+  findProblemsByPhoneAndCode,
+  consumeTrackAttempt,
+  clearTrackAttempts,
   countRecentByPhone,
   insertProblem,
   updateProblemStatus,
@@ -59,10 +58,8 @@ import {
   failLimiter,
   cleanText,
   cleanPhone,
-  cleanPin,
-  isFourDigitPin,
-  isWeakPin,
-  hashPin,
+  cleanTrackCode,
+  isValidTrackCode,
   ID_PATTERN,
 } from './security.js';
 import { seal, unseal, isEncryptionEnabled } from './crypto.js';
@@ -123,17 +120,12 @@ type NewProblemInput = {
   isAnonymous: boolean;
   urgency: UrgencyLevel;
   consent: boolean;
-  pin: string;
 };
 
 function parseNewProblem(body: any): { ok: true; value: NewProblemInput } | { ok: false; error: string } {
   if (!body || typeof body !== 'object') return { ok: false, error: 'তথ্য সঠিক নয়।' };
 
   if (body.consent !== true) return { ok: false, error: 'গোপনীয়তা নীতি দেখে সম্মতি দিন।' };
-  // নিজের বাছা ৪ অঙ্কের পিন: পরে অভিযোগের অবস্থা দেখতে নম্বরের সাথে লাগবে
-  const pin = cleanPin(body.pin);
-  if (!isFourDigitPin(pin)) return { ok: false, error: 'অবস্থা দেখার জন্য ৪ অঙ্কের একটি পিন বেছে নিন।' };
-  if (isWeakPin(pin)) return { ok: false, error: 'এই পিনটি সহজেই অনুমান করা যায় (যেমন ১১১১, ১২৩৪)। অন্য ৪ অঙ্ক বেছে নিন।' };
   const submissionType: SubmissionType = body.submissionType === 'advice' ? 'advice' : 'complaint';
   const title = cleanText(body.title, 120);
   const description = cleanText(body.description, 1000);
@@ -168,7 +160,6 @@ function parseNewProblem(body: any): { ok: true; value: NewProblemInput } | { ok
       isAnonymous: false,
       urgency,
       consent: true,
-      pin,
     },
   };
 }
@@ -180,8 +171,8 @@ async function createProblemRecord(input: NewProblemInput): Promise<ProblemRepor
   const nowIso = new Date().toISOString();
 
   for (let attempt = 0; attempt < 8; attempt++) {
-    const digits = attempt < 5 ? 4 : 6;
-    const num = crypto.randomInt(10 ** (digits - 1), 10 ** digits);
+    // ৬ অঙ্কের এলোমেলো সংখ্যা: এটিই অবস্থা দেখার দ্বিতীয় চাবি, তাই অনুমান করা কঠিন রাখা হয়েছে
+    const num = crypto.randomInt(100000, 1000000);
     const trackingCode = `${prefix}-${year}-${num}`;
     const id = `${isAdvice ? 'adv' : 'prob'}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
 
@@ -218,7 +209,7 @@ async function createProblemRecord(input: NewProblemInput): Promise<ProblemRepor
     };
 
     try {
-      return await insertProblem(problem, nowIso, hashPin(input.pin));
+      return await insertProblem(problem, nowIso);
     } catch (err: any) {
       if (/UNIQUE|constraint/i.test(String(err?.message))) continue; // কোড মিলে গেলে আবার চেষ্টা
       throw err;
@@ -543,8 +534,8 @@ export function createApp() {
     }
   );
 
-  // অভিযোগের অবস্থা: মোবাইল নম্বর + নাগরিকের নিজের বাছা ৪ অঙ্কের পিন। নম্বর ভুল না পিন ভুল, তা বলা হয় না।
-  // প্রতি নম্বরে ঘণ্টায় ৫ বারের বেশি পিন যাচাই হয় না (ডেটাবেসে গোনা); এক IP থেকে ভুল চেষ্টাও সীমিত।
+  // অভিযোগের অবস্থা: মোবাইল নম্বর + রেফারেন্স কোড (যেমন JNS-2026-483627)। নম্বর ভুল না কোড ভুল, তা বলা হয় না।
+  // প্রতি নম্বরে ঘণ্টায় ৫ বারের বেশি কোড যাচাই হয় না (ডেটাবেসে গোনা); এক IP থেকে ভুল চেষ্টাও সীমিত।
   const trackFails = failLimiter('trackfail', 8, 15 * 60 * 1000);
   app.post(
     '/api/track',
@@ -559,22 +550,22 @@ export function createApp() {
         }
         const phone = normalizeBdMobile(typeof req.body?.phone === 'string' ? req.body.phone : '');
         if (!phone) return res.status(400).json({ error: 'সঠিক মোবাইল নম্বর লিখুন (যেমন ০১৭XXXXXXXX)।' });
-        const pin = cleanPin(req.body?.pin);
-        if (!isFourDigitPin(pin)) return res.status(400).json({ error: 'আপনার ৪ অঙ্কের পিন লিখুন।' });
+        const code = cleanTrackCode(req.body?.code);
+        if (!isValidTrackCode(code)) return res.status(400).json({ error: 'আপনার রেফারেন্স কোড লিখুন (যেমন JNS-2026-483627)।' });
 
-        const gate = await consumePinAttempt(phone);
+        const gate = await consumeTrackAttempt(phone);
         if (!gate.allowed) {
           res.setHeader('Retry-After', String(gate.retryAfterSec));
           return res.status(429).json({
-            error: 'এই নম্বরে অনেকবার ভুল পিন দেওয়া হয়েছে। এক ঘণ্টা পরে আবার চেষ্টা করুন, অথবা অফিসে ফোন করুন।',
+            error: 'এই নম্বরে অনেকবার ভুল কোড দেওয়া হয়েছে। এক ঘণ্টা পরে আবার চেষ্টা করুন, অথবা অফিসে ফোন করুন।',
           });
         }
-        const found = await findProblemsByPhoneAndPin(phone, pin);
+        const found = await findProblemsByPhoneAndCode(phone, code);
         if (!found.length) {
           trackFails.fail(req);
           return res.status(404).json({ error: 'not_found' });
         }
-        await clearPinAttempts(phone);
+        await clearTrackAttempts(phone);
         res.json(found.map(toTrackView));
       } catch (err) {
         console.error('Track failed:', err);
@@ -675,24 +666,6 @@ export function createApp() {
   });
 
   // শ্রেণিবিন্যাস: সমস্যার ধরন ও জরুরি মাত্রা
-  // নাগরিক পিন ভুলে গেলে মালিক (ফোনে পরিচয় নিশ্চিত করে) নতুন পিন বসান
-  app.patch('/api/problems/:id/pin', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
-    try {
-      const { id } = req.params;
-      if (!ID_PATTERN.test(id)) return res.status(400).json({ error: 'ভুল আইডি।' });
-      const pin = cleanPin(req.body?.pin);
-      if (!isFourDigitPin(pin)) return res.status(400).json({ error: 'পিন ৪ অঙ্কের সংখ্যা হতে হবে।' });
-      if (isWeakPin(pin)) return res.status(400).json({ error: 'সহজ পিন (যেমন ১১১১, ১২৩৪) নেওয়া যায় না।' });
-      const ok = await setProblemPinHash(id, hashPin(pin));
-      if (!ok) return res.status(404).json({ error: 'অভিযোগ পাওয়া যায়নি।' });
-      await audit(res, 'pin_reset', id);
-      res.json({ ok: true });
-    } catch (err) {
-      console.error('Failed to reset pin:', err);
-      res.status(500).json({ error: 'পিন বদলানো যায়নি।' });
-    }
-  });
-
   app.patch('/api/problems/:id/classify', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
