@@ -13,6 +13,7 @@ import {
 } from '../types';
 import { MANIFESTO_CATEGORIES_CONFIG, INITIAL_MANIFESTO_ITEMS } from '../data/manifestoData';
 import { LEADER_PERMANENT_PHOTO_URL, INITIAL_AREAS } from '../data/mockData';
+import { EMERGENCY_ITEMS, EmergencyContacts } from '../data/emergencyData';
 import { 
   X, 
   CheckCircle2, 
@@ -42,7 +43,8 @@ import {
   Sliders,
   ChevronRight,
   ChevronLeft,
-  Database
+  Database,
+  PhoneCall
 } from 'lucide-react';
 import { sanitizeString, sanitizeForCsv } from '../services/security';
 import { api, ApiError, NeedsTwoFactorError, DbStatusInfo, AdminSessionInfo } from '../services/api';
@@ -62,6 +64,8 @@ interface AdminSectionModalProps {
   onSetLeaderPhoto: (dataUrl: string | null) => Promise<void>;
   wardVillages: Record<string, string>;
   onSaveWardVillages: (villages: Record<string, string>) => Promise<void>;
+  emergencyContacts: EmergencyContacts;
+  onSaveEmergency: (contacts: EmergencyContacts) => Promise<void>;
   onStatsChanged?: () => void;
   onUpdateManifestoItem: (updatedItem: ManifestoItem) => void;
   onAddManifestoItem: (newItem: ManifestoItem) => void;
@@ -82,6 +86,8 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
   onSetLeaderPhoto,
   wardVillages,
   onSaveWardVillages,
+  emergencyContacts,
+  onSaveEmergency,
   onStatsChanged,
   onUpdateManifestoItem,
   onAddManifestoItem,
@@ -174,6 +180,9 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
   const [editVillages, setEditVillages] = useState<Record<string, string>>(wardVillages);
   const [isSavingVillages, setIsSavingVillages] = useState(false);
   const [villagesMsg, setVillagesMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [editEmergency, setEditEmergency] = useState<EmergencyContacts>(emergencyContacts);
+  const [isSavingEmergency, setIsSavingEmergency] = useState(false);
+  const [emergencyMsg, setEmergencyMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   // Turso Database State
   const [dbStatus, setDbStatus] = useState<DbStatusInfo | null>(null);
@@ -234,6 +243,10 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
   useEffect(() => {
     setEditVillages(wardVillages);
   }, [wardVillages]);
+
+  useEffect(() => {
+    setEditEmergency(emergencyContacts);
+  }, [emergencyContacts]);
 
   if (!isOpen) return null;
 
@@ -372,6 +385,20 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
     }
   };
 
+
+  const handleSaveEmergency = async () => {
+    if (isSavingEmergency) return;
+    setEmergencyMsg(null);
+    setIsSavingEmergency(true);
+    try {
+      await onSaveEmergency(editEmergency);
+      setEmergencyMsg({ ok: true, text: 'জরুরি সেবার নম্বর সংরক্ষিত হয়েছে।' });
+    } catch (err) {
+      setEmergencyMsg({ ok: false, text: errText(err) });
+    } finally {
+      setIsSavingEmergency(false);
+    }
+  };
 
   // Filter complaints & advice
   const filteredProblems = problems.filter((p) => {
@@ -599,7 +626,7 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                 {language === 'bn' ? 'ধামতী ইউনিয়ন অ্যাডমিন পোর্টাল' : 'Dhamti Central Admin Portal'}
               </h3>
               <p className="text-[11px] sm:text-xs text-emerald-200 truncate hidden xs:block">
-                {language === 'bn' ? 'অভিযোগ, উপদেশ, নির্বাচনী ইশতেহার ও সুশাসন নিয়ন্ত্রণ' : 'Governance & Manifesto Control'}
+                {language === 'bn' ? 'অভিযোগ, উপদেশ, আমাদের অঙ্গীকার ও সুশাসন নিয়ন্ত্রণ' : 'Governance & Our Pledge Control'}
               </p>
             </div>
           </div>
@@ -747,7 +774,7 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                   }`}
                 >
                   <Award className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                  <span>{language === 'bn' ? 'নির্বাচনী ইশতেহার' : 'Electoral Manifesto'}</span>
+                  <span>{language === 'bn' ? 'আমাদের অঙ্গীকার' : 'Our Pledge'}</span>
                   <span className="ml-0.5 px-1.5 py-0.2 bg-amber-100 text-amber-900 rounded-full font-mono text-[10px]">
                     {manifestoItems.length}
                   </span>
@@ -2324,6 +2351,60 @@ export const AdminSectionModal: React.FC<AdminSectionModalProps> = ({
                       className="px-6 py-3 bg-emerald-700 hover:bg-emerald-800 disabled:bg-neutral-400 text-white rounded-xl text-sm font-bold shadow-sm transition-all cursor-pointer"
                     >
                       {isSavingVillages ? 'সংরক্ষণ হচ্ছে…' : language === 'bn' ? 'গ্রামের নাম সংরক্ষণ করুন' : 'Save villages'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* জরুরি সেবার নম্বর */}
+                <div className="bg-neutral-50 p-5 rounded-2xl border border-neutral-200 space-y-4 max-w-3xl">
+                  <h4 className="text-sm font-bold text-neutral-900 flex items-center gap-2">
+                    <PhoneCall className="w-4 h-4 text-red-600" />
+                    <span>{language === 'bn' ? 'জরুরি সেবার নম্বর' : 'Emergency numbers'}</span>
+                  </h4>
+                  <p className="text-xs text-neutral-500 leading-relaxed">
+                    {language === 'bn'
+                      ? 'প্রথম পাতার "জরুরি সেবা" অংশে এই নম্বরগুলো দেখাবে। থানা ও হেলথ ডেস্কের আসল নম্বর এখানে বসান। ফাঁকা রাখলে "নম্বর শীঘ্রই যুক্ত হবে" দেখাবে। নম্বর ঠিক কিনা নিজে একবার ফোন করে নিশ্চিত হয়ে নিন।'
+                      : 'These show in the Emergency section on the home page. Leave blank to show "coming soon".'}
+                  </p>
+                  <div className="space-y-3">
+                    {EMERGENCY_ITEMS.map((item) => (
+                      <div key={item.id}>
+                        <label className="block text-xs font-bold text-neutral-700 mb-1" htmlFor={`emergency-${item.id}`}>
+                          {language === 'bn' ? item.bn : item.en}
+                        </label>
+                        <input
+                          id={`emergency-${item.id}`}
+                          type="tel"
+                          inputMode="tel"
+                          maxLength={20}
+                          value={editEmergency[item.id] || ''}
+                          onChange={(e) => setEditEmergency((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                          placeholder="01XXX-XXXXXX"
+                          className="w-full px-3.5 py-2.5 text-sm bg-white border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {emergencyMsg && (
+                    <div
+                      role="status"
+                      className={`text-xs font-bold px-3 py-2 rounded-lg border ${
+                        emergencyMsg.ok
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-red-50 border-red-200 text-red-700'
+                      }`}
+                    >
+                      {emergencyMsg.text}
+                    </div>
+                  )}
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={handleSaveEmergency}
+                      disabled={isSavingEmergency}
+                      className="px-6 py-3 bg-emerald-700 hover:bg-emerald-800 disabled:bg-neutral-400 text-white rounded-xl text-sm font-bold shadow-sm transition-all cursor-pointer"
+                    >
+                      {isSavingEmergency ? 'সংরক্ষণ হচ্ছে…' : language === 'bn' ? 'নম্বর সংরক্ষণ করুন' : 'Save numbers'}
                     </button>
                   </div>
                 </div>

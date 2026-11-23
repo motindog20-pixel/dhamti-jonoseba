@@ -321,6 +321,48 @@ async function readWardVillages(): Promise<Record<string, string>> {
   }
 }
 
+// জরুরি সেবার নম্বর (সবার জন্য খোলা)। জাতীয় নম্বরগুলো ডিফল্ট; থানা/হেলথ ডেস্কের নম্বর অ্যাডমিন বসান।
+// (এই ডিফল্ট src/data/emergencyData.ts-এও আছে; দুই জায়গায় মিলিয়ে রাখুন)
+const EMERGENCY_KEY = 'emergencyContacts';
+const EMERGENCY_FIELDS = ['national', 'fire', 'police', 'health'] as const;
+type EmergencyField = (typeof EMERGENCY_FIELDS)[number];
+type EmergencyContacts = Record<EmergencyField, string>;
+const DEFAULT_EMERGENCY: EmergencyContacts = { national: '999', fire: '102', police: '', health: '16263' };
+
+// নম্বরে শুধু অঙ্ক, +, -, ফাঁকা থাকতে পারে (বাংলা অঙ্ক ইংরেজিতে বদলে নিই), সর্বোচ্চ ২০ অক্ষর
+function cleanPhoneNumber(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d)))
+    .replace(/[^0-9+\- ]/g, '')
+    .trim()
+    .slice(0, 20);
+}
+
+function parseEmergency(body: any): EmergencyContacts | null {
+  const raw = body?.emergencyContacts;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = { ...DEFAULT_EMERGENCY };
+  for (const f of EMERGENCY_FIELDS) {
+    if (f in raw) out[f] = cleanPhoneNumber((raw as Record<string, unknown>)[f]);
+  }
+  return out;
+}
+
+async function readEmergency(): Promise<EmergencyContacts> {
+  try {
+    const raw = await getSetting(EMERGENCY_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    const out = { ...DEFAULT_EMERGENCY };
+    for (const f of EMERGENCY_FIELDS) {
+      if (typeof parsed?.[f] === 'string') out[f] = cleanPhoneNumber(parsed[f]);
+    }
+    return out;
+  } catch {
+    return { ...DEFAULT_EMERGENCY };
+  }
+}
+
 export function createApp() {
   const app = express();
   app.set('trust proxy', 1);
@@ -613,10 +655,10 @@ export function createApp() {
     }
   });
 
-  // সাইটের পাবলিক সেটিংস (এখন: ওয়ার্ডের গ্রামের নাম)
+  // সাইটের পাবলিক সেটিংস (ওয়ার্ডের গ্রামের নাম + জরুরি সেবার নম্বর)
   app.get('/api/settings', async (_req: Request, res: Response) => {
     try {
-      res.json({ wardVillages: await readWardVillages() });
+      res.json({ wardVillages: await readWardVillages(), emergencyContacts: await readEmergency() });
     } catch (err) {
       console.error('Failed to get settings:', err);
       res.status(500).json({ error: 'সেটিংস আনা যায়নি।' });
@@ -876,10 +918,17 @@ export function createApp() {
 
   app.put('/api/settings', requireOwner, needsPersistentDb, async (req: Request, res: Response) => {
     try {
-      const villages = parseWardVillages(req.body);
-      if (!villages) return res.status(400).json({ error: 'সেটিংসের তথ্য সঠিক নয়।' });
-      await setSetting(WARD_VILLAGES_KEY, JSON.stringify(villages));
-      res.json({ wardVillages: villages });
+      const hasVillages = req.body && typeof req.body === 'object' && 'wardVillages' in req.body;
+      const hasEmergency = req.body && typeof req.body === 'object' && 'emergencyContacts' in req.body;
+      if (!hasVillages && !hasEmergency) return res.status(400).json({ error: 'সেটিংসের তথ্য সঠিক নয়।' });
+      const villages = hasVillages ? parseWardVillages(req.body) : null;
+      const emergency = hasEmergency ? parseEmergency(req.body) : null;
+      if ((hasVillages && !villages) || (hasEmergency && !emergency)) {
+        return res.status(400).json({ error: 'সেটিংসের তথ্য সঠিক নয়।' });
+      }
+      if (villages) await setSetting(WARD_VILLAGES_KEY, JSON.stringify(villages));
+      if (emergency) await setSetting(EMERGENCY_KEY, JSON.stringify(emergency));
+      res.json({ wardVillages: await readWardVillages(), emergencyContacts: await readEmergency() });
     } catch (err) {
       console.error('Failed to save settings:', err);
       res.status(500).json({ error: 'সংরক্ষণ করা যায়নি।' });

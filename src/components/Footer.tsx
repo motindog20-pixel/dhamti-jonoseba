@@ -66,7 +66,7 @@ export const Footer: React.FC<FooterProps> = ({
               </li>
               <li>
                 <a href="#manifesto" className="hover:text-emerald-400 transition-colors">
-                  {language === 'bn' ? 'নির্বাচনী ইশতেহার ও প্রতিশ্রুতি' : 'Electoral Manifesto Progress'}
+                  {language === 'bn' ? 'আমাদের অঙ্গীকার ও প্রতিশ্রুতি' : 'Our Pledge & Progress'}
                 </a>
               </li>
               <li>

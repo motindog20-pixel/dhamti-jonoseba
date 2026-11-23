@@ -2,9 +2,11 @@ import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import { Language, ProblemReport, AreaStat, CategoryStat, LeaderProfile, ManifestoItem, PublicStats } from './types';
 import { INITIAL_AREAS, CATEGORIES, DEFAULT_PROFILE } from './data/mockData';
 import { INITIAL_MANIFESTO_ITEMS } from './data/manifestoData';
+import { DEFAULT_EMERGENCY, EmergencyContacts } from './data/emergencyData';
 import { Header } from './components/Header';
 import { HeroSection } from './components/HeroSection';
 import { ManifestoSection } from './components/ManifestoSection';
+import { EmergencySection } from './components/EmergencySection';
 import { StatisticsSection } from './components/StatisticsSection';
 import { SubmitProblemModal } from './components/SubmitProblemModal';
 import { TrackProblemModal } from './components/TrackProblemModal';
@@ -23,6 +25,7 @@ const LEGACY_KEY_PROBLEMS = 'dhamti_real_problems_v1';
 const STORAGE_KEY_PROFILE = 'dhamti_leader_profile_v1';
 const STORAGE_KEY_VILLAGES = 'dhamti_ward_villages_v1';
 const STORAGE_KEY_MANIFESTO = 'dhamti_electoral_manifesto_v2';
+const STORAGE_KEY_EMERGENCY = 'dhamti_emergency_v1';
 
 export default function App() {
   const [language, setLanguage] = useState<Language>('bn');
@@ -59,6 +62,17 @@ export default function App() {
       // ignore
     }
     return {};
+  });
+
+  // জরুরি সেবার নম্বর (সবার জন্য খোলা তথ্য; ব্রাউজারে ক্যাশ রাখা নিরাপদ)
+  const [emergency, setEmergency] = useState<EmergencyContacts>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_EMERGENCY);
+      if (saved) return { ...DEFAULT_EMERGENCY, ...JSON.parse(saved) };
+    } catch {
+      // ignore
+    }
+    return DEFAULT_EMERGENCY;
   });
 
   // Persistent Electoral Manifesto (updated directly by admin)
@@ -118,6 +132,9 @@ export default function App() {
         if (dbSettings && dbSettings.wardVillages && typeof dbSettings.wardVillages === 'object') {
           setWardVillages(dbSettings.wardVillages);
         }
+        if (dbSettings && dbSettings.emergencyContacts && typeof dbSettings.emergencyContacts === 'object') {
+          setEmergency({ ...DEFAULT_EMERGENCY, ...dbSettings.emergencyContacts });
+        }
         if (dbProfile && dbProfile.name) {
           setLeaderProfile((prev) => ({
             ...prev,
@@ -153,6 +170,14 @@ export default function App() {
       // storage unavailable
     }
   }, [wardVillages]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_EMERGENCY, JSON.stringify(emergency));
+    } catch {
+      // storage unavailable
+    }
+  }, [emergency]);
 
   // Sync manifesto to localStorage as local cache
   useEffect(() => {
@@ -258,6 +283,11 @@ export default function App() {
     setWardVillages(saved.wardVillages || {});
   };
 
+  const handleSaveEmergency = async (contacts: EmergencyContacts) => {
+    const saved = await api.updateSettings({ emergencyContacts: contacts });
+    setEmergency({ ...DEFAULT_EMERGENCY, ...(saved.emergencyContacts || {}) });
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-neutral-50 text-neutral-900 pb-24 md:pb-0">
       {/* Top Bar Header (Clean Citizen View) */}
@@ -279,6 +309,9 @@ export default function App() {
           resolvedProblemsCount={stats ? stats.reviewDone : null}
           leaderProfile={leaderProfile}
         />
+
+        {/* জরুরি সেবা (ফায়ার সার্ভিস, পুলিশ, জাতীয় জরুরি সেবা, হেলথ ডেস্ক) */}
+        <EmergencySection language={language} contacts={emergency} />
 
         {/* Dedicated Electoral Manifesto Section (Updated live by Admin) */}
         <ManifestoSection
@@ -326,6 +359,8 @@ export default function App() {
             onSetLeaderPhoto={handleSetLeaderPhoto}
             wardVillages={wardVillages}
             onSaveWardVillages={handleSaveWardVillages}
+            emergencyContacts={emergency}
+            onSaveEmergency={handleSaveEmergency}
             onStatsChanged={loadStats}
             onUpdateManifestoItem={handleUpdateManifestoItem}
             onAddManifestoItem={handleAddManifestoItem}

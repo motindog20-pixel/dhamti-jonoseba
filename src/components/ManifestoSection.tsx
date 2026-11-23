@@ -136,12 +136,12 @@ export const ManifestoSection: React.FC<ManifestoSectionProps> = ({
       {
         n: '২',
         bn: 'আমরা শুনি',
-        textBn: 'প্রতিটি মতামত পড়ে এলাকার প্রয়োজন বুঝে ইশতেহার সাজানো হবে।',
+        textBn: 'প্রতিটি মতামত পড়ে এলাকার প্রয়োজন বুঝে আমাদের অঙ্গীকার সাজানো হবে।',
       },
       {
         n: '৩',
         bn: 'অগ্রগতি দেখুন',
-        textBn: 'ইশতেহার প্রকাশের পর প্রতিটি প্রতিশ্রুতির অবস্থা (চলছে/সম্পন্ন) এখানেই দেখতে পাবেন।',
+        textBn: 'অঙ্গীকার প্রকাশের পর প্রতিটি প্রতিশ্রুতির অবস্থা (চলছে/সম্পন্ন) এখানেই দেখতে পাবেন।',
       },
     ];
     const bn = language === 'bn';
@@ -150,15 +150,15 @@ export const ManifestoSection: React.FC<ManifestoSectionProps> = ({
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 border border-white/20 text-amber-300 text-sm font-semibold mb-4">
             <Sparkles className="w-4 h-4" aria-hidden="true" />
-            <span>{bn ? 'নির্বাচনী ইশতেহার' : 'Electoral Manifesto'}</span>
+            <span>{bn ? 'আমাদের অঙ্গীকার' : 'Our Pledge'}</span>
           </div>
 
           <h2 className="text-3xl sm:text-4xl font-bold leading-[1.3] font-serif-bangla">
-            {bn ? 'আমাদের ইশতেহার শীঘ্রই আসছে' : 'Our manifesto is coming soon'}
+            {bn ? 'আমাদের অঙ্গীকার শীঘ্রই আসছে' : 'Our pledge is coming soon'}
           </h2>
           <p className="mt-3 text-base sm:text-lg text-emerald-100 leading-relaxed max-w-2xl mx-auto">
             {bn
-              ? 'ইশতেহার লেখার আগে আমরা আপনার কথা শুনতে চাই। আপনার এলাকার সবচেয়ে বড় সমস্যা বা প্রত্যাশা কী?'
+              ? 'অঙ্গীকার ঠিক করার আগে আমরা আপনার কথা শুনতে চাই। আপনার এলাকার সবচেয়ে বড় সমস্যা বা প্রত্যাশা কী?'
               : 'Before writing it, we want to hear from you. What matters most in your area?'}
           </p>
 
@@ -197,11 +197,11 @@ export const ManifestoSection: React.FC<ManifestoSectionProps> = ({
         <div className="text-center max-w-3xl mx-auto mb-10">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-emerald-50 text-emerald-900 text-xs font-semibold mb-3 border border-emerald-200/80">
             <Award className="w-3.5 h-3.5 text-emerald-700" />
-            <span>{language === 'bn' ? 'নির্বাচনী অঙ্গীকার ও উন্নয়ন ইশতেহার' : 'Electoral Manifesto & Commitments'}</span>
+            <span>{language === 'bn' ? 'আমাদের অঙ্গীকার ও উন্নয়ন প্রতিশ্রুতি' : 'Our Pledge & Commitments'}</span>
           </div>
           
           <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold text-neutral-900 leading-[1.3] font-serif-bangla">
-            {language === 'bn' ? 'ধামতী ইউনিয়ন রূপকল্প ও নির্বাচনী ইশতেহার' : 'Dhamti Vision & Electoral Manifesto Progress'}
+            {language === 'bn' ? 'ধামতী ইউনিয়নের রূপকল্প ও আমাদের অঙ্গীকার' : 'Dhamti Vision & Our Pledge'}
           </h2>
           
           <p className="text-sm sm:text-base text-neutral-600 mt-2.5 leading-relaxed font-sans-bangla">
@@ -309,7 +309,7 @@ export const ManifestoSection: React.FC<ManifestoSectionProps> = ({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={language === 'bn' ? 'ইশতেহার বা উন্নয়ন প্রতিশ্রুতি অনুসন্ধান...' : 'Search manifesto pledges & projects...'}
+                placeholder={language === 'bn' ? 'অঙ্গীকার বা উন্নয়ন প্রতিশ্রুতি অনুসন্ধান...' : 'Search manifesto pledges & projects...'}
                 className="w-full pl-10 pr-4 py-2 text-xs sm:text-sm bg-neutral-50 border border-neutral-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:bg-white transition-all"
               />
               {searchQuery && (
@@ -603,7 +603,7 @@ export const ManifestoSection: React.FC<ManifestoSectionProps> = ({
               </h4>
               <p className="text-xs text-emerald-200 mt-0.5 leading-relaxed">
                 {language === 'bn'
-                  ? 'আপনার কোনো পরামর্শ বা ইশতেহারের কাজ নিয়ে মতামত থাকলে সরাসরি আমাদের "উপদেশ ও পরামর্শ" ট্যাবের মাধ্যমে জানাতে পারেন।'
+                  ? 'আপনার কোনো পরামর্শ বা অঙ্গীকারের কাজ নিয়ে মতামত থাকলে সরাসরি আমাদের "উপদেশ ও পরামর্শ" ট্যাবের মাধ্যমে জানাতে পারেন।'
                   : 'Have suggestions or feedback regarding any of our commitments? Share your advice directly through our citizen portal.'}
               </p>
             </div>

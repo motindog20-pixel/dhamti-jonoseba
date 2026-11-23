@@ -459,6 +459,26 @@ ok('public settings show villages', r.json?.wardVillages?.['ward-01'] === 'উ�
 r = await call('PUT', '/api/settings', { body: { wardVillages: 'x' }, cookie });
 ok('bad settings payload -> 400', r.status === 400);
 
+// ---- জরুরি সেবার নম্বর ----
+r = await call('GET', '/api/settings');
+ok('emergency defaults: 999 / fire 102 / police empty / health 16263', r.json?.emergencyContacts?.national === '999' && r.json.emergencyContacts.fire === '102' && r.json.emergencyContacts.police === '' && r.json.emergencyContacts.health === '16263', JSON.stringify(r.json));
+r = await call('PUT', '/api/settings', { body: { emergencyContacts: { police: '01711-000000' } } });
+ok('emergency write without login -> 401', r.status === 401);
+r = await call('PUT', '/api/settings', { body: { emergencyContacts: { police: '০১৭১১-০০০০০০ <b>x</b>', health: '  +880 1999-123456  ', fire: '' } }, cookie });
+ok('admin saves emergency numbers: Bangla digits -> ASCII, letters/html stripped', r.status === 200 && r.json?.emergencyContacts?.police === '01711-000000' && r.json.emergencyContacts.health === '+880 1999-123456', JSON.stringify(r.json));
+ok('cleared field stays empty (not silently default)', r.json?.emergencyContacts?.fire === '' && r.json.emergencyContacts.national === '999');
+ok('saving emergency leaves villages untouched', r.json?.wardVillages?.['ward-01'] === 'উত্তর ধামতী');
+r = await call('GET', '/api/settings');
+ok('public settings show emergency numbers', r.json?.emergencyContacts?.police === '01711-000000');
+r = await call('PUT', '/api/settings', { body: { wardVillages: { 'ward-01': 'উত্তর ধামতী' } }, cookie });
+ok('saving villages leaves emergency numbers untouched', r.status === 200 && r.json?.emergencyContacts?.police === '01711-000000');
+r = await call('PUT', '/api/settings', { body: { emergencyContacts: { police: '1'.repeat(60) } }, cookie });
+ok('emergency number capped at 20 chars', r.status === 200 && r.json?.emergencyContacts?.police.length === 20);
+r = await call('PUT', '/api/settings', { body: { emergencyContacts: 'x' }, cookie });
+ok('bad emergency payload -> 400', r.status === 400);
+r = await call('PUT', '/api/settings', { body: {}, cookie });
+ok('empty settings payload -> 400', r.status === 400);
+
 // ---- migrations on a pre-existing (old) database ----
 await db.execute({ sql: `UPDATE leader_profile SET designation=?, office_address=? WHERE id='current'`, args: ['ধামতী ইউনিয়ন সেবক', 'ধামতী ইউনিয়ন জনসেবা কার্যালয়, দেবিদ্বার, কুমিল্লা'] });
 const ins = (id, date) => db.execute({ sql: `INSERT INTO manifesto_items (id,title_bn,title_en,category,summary_bn,summary_en,description_bn,description_en,progress_percentage,status,target_year,budget_or_scope,milestones,last_updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, args: [id, 'ডেমো', 'demo', 'roads_infrastructure', '', '', '', '', 65, 'in_progress', '২০২৬', '', '[]', date] });

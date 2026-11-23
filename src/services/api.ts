@@ -1,4 +1,5 @@
 import { ProblemReport, ManifestoItem, LeaderProfile, ProblemStatus, PublicStats } from '../types';
+import type { EmergencyContacts } from '../data/emergencyData';
 
 export interface DbStatusInfo {
   connected: boolean;
@@ -58,6 +59,7 @@ const jsonHeaders = { 'Content-Type': 'application/json' };
 /** ওয়ার্ড আইডি (ward-01…) → গ্রামের নাম */
 export interface SiteSettings {
   wardVillages: Record<string, string>;
+  emergencyContacts?: EmergencyContacts;
 }
 
 export const api = {
@@ -292,7 +294,7 @@ export const api = {
     return await res.json();
   },
 
-  async updateSettings(settings: SiteSettings): Promise<SiteSettings> {
+  async updateSettings(settings: Partial<SiteSettings>): Promise<SiteSettings> {
     const res = await fetch('/api/settings', {
       method: 'PUT',
       credentials: 'same-origin',

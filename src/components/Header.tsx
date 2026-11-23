@@ -9,7 +9,8 @@ import {
   FileCheck2, 
   BarChart3, 
   MessageSquareText, 
-  Search
+  Search,
+  Siren
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -65,8 +66,11 @@ export const Header: React.FC<HeaderProps> = ({
           <a href="#hero-banner" className="hover:text-emerald-800 transition-colors whitespace-nowrap shrink-0">
             {language === 'bn' ? 'মূলবার্তা' : 'Overview'}
           </a>
+          <a href="#emergency" className="hover:text-red-700 transition-colors whitespace-nowrap shrink-0 font-semibold text-red-700">
+            {language === 'bn' ? 'জরুরি সেবা' : 'Emergency'}
+          </a>
           <a href="#manifesto" className="hover:text-emerald-800 transition-colors whitespace-nowrap shrink-0 font-semibold text-emerald-900">
-            {language === 'bn' ? 'নির্বাচনী ইশতেহার' : 'Manifesto'}
+            {language === 'bn' ? 'আমাদের অঙ্গীকার' : 'Our Pledge'}
           </a>
           <a href="#statistics" className="hover:text-emerald-800 transition-colors whitespace-nowrap shrink-0">
             {language === 'bn' ? 'পরিসংখ্যান' : 'Statistics'}
@@ -119,11 +123,19 @@ export const Header: React.FC<HeaderProps> = ({
           </a>
 
           <a
+            href="#emergency"
+            className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg text-xs sm:text-xs font-bold text-red-800 bg-red-50 border border-red-200 transition-colors min-w-0"
+          >
+            <Siren className="w-4 h-4 text-red-600 mb-0.5 shrink-0" />
+            <span className="truncate w-full leading-tight">{language === 'bn' ? 'জরুরি' : 'Urgent'}</span>
+          </a>
+
+          <a
             href="#manifesto"
             className="flex flex-col items-center justify-center py-1.5 px-0.5 rounded-lg text-xs sm:text-xs font-bold text-emerald-950 bg-emerald-100/70 border border-emerald-200/80 transition-colors min-w-0"
           >
             <FileCheck2 className="w-4 h-4 text-emerald-800 mb-0.5 shrink-0" />
-            <span className="truncate w-full leading-tight">{language === 'bn' ? 'ইশতেহার' : 'Manifesto'}</span>
+            <span className="truncate w-full leading-tight">{language === 'bn' ? 'অঙ্গীকার' : 'Pledge'}</span>
           </a>
 
           <a
@@ -158,12 +170,21 @@ export const Header: React.FC<HeaderProps> = ({
           </a>
 
           <a
+            href="#emergency"
+            onClick={() => handleMobileNavClick()}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-semibold text-red-800 bg-red-50 hover:bg-red-100/70 transition-colors"
+          >
+            <Siren className="w-4 h-4 text-red-600" />
+            <span>{language === 'bn' ? 'জরুরি সেবা' : 'Emergency Services'}</span>
+          </a>
+
+          <a
             href="#manifesto"
             onClick={() => handleMobileNavClick()}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-semibold text-emerald-950 bg-emerald-50 hover:bg-emerald-100/70 transition-colors"
           >
             <FileCheck2 className="w-4 h-4 text-emerald-700" />
-            <span>{language === 'bn' ? 'নির্বাচনী ইশতেহার ও রূপকল্প' : 'Electoral Manifesto'}</span>
+            <span>{language === 'bn' ? 'আমাদের অঙ্গীকার ও রূপকল্প' : 'Our Pledge'}</span>
           </a>
 
           <a
